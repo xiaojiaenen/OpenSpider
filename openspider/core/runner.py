@@ -70,8 +70,9 @@ class SpiderRunner:
             # 注入停止信号
             spider._stop_event = self._stop_event
 
-            # 创建 Scrapling session
-            await self._create_session()
+            # 创建 Scrapling session（使用 async context manager）
+            self._session_ctx = self._create_session_context()
+            self._session = await self._session_ctx.__aenter__()
             spider._session = self._session
 
             # 调用 on_start 钩子
@@ -111,43 +112,57 @@ class SpiderRunner:
                 f"错误: {self.errors_count}"
             )
 
-    async def _create_session(self) -> None:
-        """根据爬虫配置创建 Scrapling session"""
+    def _create_session_context(self):
+        """根据爬虫配置创建 Scrapling session 的 async context manager"""
         from scrapling.fetchers import FetcherSession, AsyncStealthySession, AsyncDynamicSession
+        from contextlib import asynccontextmanager
 
-        if self.spider.use_stealth:
-            self._session = AsyncStealthySession(
+        spider = self.spider
+
+        if spider.use_stealth:
+            session = AsyncStealthySession(
                 headless=True,
-                solve_cloudflare=self.spider.solve_cloudflare,
-                block_webrtc=self.spider.block_webrtc,
-                hide_canvas=self.spider.hide_canvas,
-                allow_webgl=self.spider.allow_webgl,
-                real_chrome=self.spider.real_chrome,
-                cdp_url=self.spider.cdp_url,
-                user_data_dir=self.spider.user_data_dir,
-                max_pages=self.spider.max_pages,
-                block_ads=self.spider.block_ads,
-                dns_over_https=self.spider.dns_over_https,
-                locale=self.spider.locale,
-                timeout=self.spider.timeout * 1000,  # 毫秒
+                solve_cloudflare=spider.solve_cloudflare,
+                block_webrtc=spider.block_webrtc,
+                hide_canvas=spider.hide_canvas,
+                allow_webgl=spider.allow_webgl,
+                real_chrome=spider.real_chrome,
+                cdp_url=spider.cdp_url,
+                user_data_dir=spider.user_data_dir,
+                max_pages=spider.max_pages,
+                block_ads=spider.block_ads,
+                dns_over_https=spider.dns_over_https,
+                locale=spider.locale,
+                timezone_id=spider.timezone_id,
+                timeout=spider.timeout * 1000,  # 毫秒
+                wait=spider.wait,
+                disable_resources=spider.disable_resources,
+                network_idle=spider.network_idle,
+                load_dom=spider.load_dom,
+                wait_selector=spider.wait_selector,
+                wait_selector_state=spider.wait_selector_state,
+                init_script=spider.init_script,
+                capture_xhr=spider.capture_xhr,
             )
         else:
-            self._session = FetcherSession(
-                impersonate=self.spider.impersonate,
-                http3=self.spider.http3,
-                stealthy_headers=self.spider.stealthy_headers,
-                verify=self.spider.ssl_verify,
-                timeout=self.spider.timeout,
+            session = FetcherSession(
+                impersonate=spider.impersonate,
+                http3=spider.http3,
+                stealthy_headers=spider.stealthy_headers,
+                verify=spider.ssl_verify,
+                timeout=spider.timeout,
             )
+        return session
 
     async def _close_session(self) -> None:
         """关闭 Scrapling session"""
-        if self._session is not None:
+        if hasattr(self, '_session_ctx') and self._session_ctx is not None:
             try:
-                await self._session.__aexit__(None, None, None)
+                await self._session_ctx.__aexit__(None, None, None)
             except Exception:
                 pass
-            self._session = None
+            self._session_ctx = None
+        self._session = None
 
     async def _save_item(self, item: dict) -> None:
         """保存数据项到数据库"""

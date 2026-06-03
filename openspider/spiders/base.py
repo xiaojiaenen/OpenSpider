@@ -131,13 +131,39 @@ class BaseSpider:
         return self._stop_event.is_set()
 
     async def get(self, url: str, **kwargs) -> Response:
-        """HTTP GET 请求"""
+        """HTTP GET 请求
+
+        自动应用爬虫配置的默认参数（headers、cookies、encoding 等），
+        调用时传入的 kwargs 优先级更高。
+        """
         if self._session is None:
             raise RuntimeError("session 未初始化，爬虫必须通过 Runner 启动")
-        return await self._session.get(url, **kwargs)
+        merged = self._merge_request_kwargs(kwargs)
+        return await self._session.get(url, **merged)
 
     async def post(self, url: str, **kwargs) -> Response:
-        """HTTP POST 请求"""
+        """HTTP POST 请求
+
+        自动应用爬虫配置的默认参数。
+        """
         if self._session is None:
             raise RuntimeError("session 未初始化，爬虫必须通过 Runner 启动")
-        return await self._session.post(url, **kwargs)
+        merged = self._merge_request_kwargs(kwargs)
+        return await self._session.post(url, **merged)
+
+    def _merge_request_kwargs(self, kwargs: dict) -> dict:
+        """合并爬虫默认配置与请求级参数，请求级优先"""
+        merged = {}
+        if self.default_headers:
+            merged["headers"] = {**self.default_headers, **kwargs.get("headers", {})}
+        if self.cookies:
+            merged["cookies"] = {**self.cookies, **kwargs.get("cookies", {})}
+        if self.encoding and "selector_config" not in kwargs:
+            merged["selector_config"] = {"adaptive": self.adaptive}
+        if self.follow_redirects is False:
+            merged.setdefault("follow_redirects", False)
+        if self.proxies and "proxy" not in kwargs and "proxy_rotator" not in kwargs:
+            merged["proxy"] = self.proxies[0]
+        # 请求级参数覆盖默认
+        merged.update(kwargs)
+        return merged
