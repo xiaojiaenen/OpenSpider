@@ -156,5 +156,124 @@ async def _show_info(name: str):
     click.echo(f"请求间隔:   {getattr(cls, 'download_delay', 0.5)}s")
 
 
+@main.command()
+@click.option("--spider", default=None, help="按爬虫筛选")
+@click.option("--status", default=None, help="按状态筛选")
+@click.option("--limit", default=20, help="显示条数")
+def tasks(spider, status, limit):
+    """查看任务列表"""
+    import asyncio
+    asyncio.run(_list_tasks(spider, status, limit))
+
+
+async def _list_tasks(spider, status, limit):
+    from openspider.storage.database import init_db, async_session
+    from openspider.models.task import TaskModel
+    from sqlalchemy import select
+
+    await init_db()
+    async with async_session() as session:
+        query = select(TaskModel).order_by(TaskModel.created_at.desc())
+        if spider:
+            query = query.where(TaskModel.spider_name == spider)
+        if status:
+            query = query.where(TaskModel.status == status)
+        query = query.limit(limit)
+        result = await session.execute(query)
+        task_list = result.scalars().all()
+
+    if not task_list:
+        click.echo("暂无任务")
+        return
+
+    click.echo(f"{'ID':<8} {'爬虫':<15} {'状态':<12} {'数据':<8} {'错误':<6} {'时间'}")
+    click.echo("-" * 70)
+    for t in task_list:
+        status_val = t.status.value if hasattr(t.status, 'value') else t.status
+        click.echo(f"{t.id:<8} {t.spider_name:<15} {status_val:<12} {t.items_scraped:<8} {t.errors_count:<6} {str(t.created_at)[:19]}")
+
+
+@main.command()
+@click.argument("task_id", type=int)
+def logs(task_id):
+    """查看任务日志"""
+    import asyncio
+    asyncio.run(_show_logs(task_id))
+
+
+async def _show_logs(task_id):
+    from openspider.storage.database import init_db, async_session
+    from openspider.models.log import LogModel
+    from sqlalchemy import select
+
+    await init_db()
+    async with async_session() as session:
+        result = await session.execute(
+            select(LogModel)
+            .where(LogModel.task_id == task_id)
+            .order_by(LogModel.created_at.desc())
+            .limit(100)
+        )
+        log_list = result.scalars().all()
+
+    if not log_list:
+        click.echo(f"任务 {task_id} 暂无日志")
+        return
+
+    for log in log_list:
+        level_val = log.level.value if hasattr(log.level, 'value') else log.level
+        click.echo(f"[{str(log.created_at)[:19]}] [{level_val.upper():8}] {log.message}")
+
+
+@main.command()
+@click.argument("name")
+@click.option("--format", "fmt", default="json", help="导出格式: json/jsonl/csv")
+@click.option("--limit", default=10000, help="最大条数")
+def export(name, fmt, limit):
+    """导出爬取数据"""
+    import asyncio
+    asyncio.run(_export_data(name, fmt, limit))
+
+
+async def _export_data(name, fmt, limit):
+    import json
+    from openspider.storage.database import init_db, async_session
+    from openspider.models.item import ItemModel
+    from sqlalchemy import select
+
+    await init_db()
+    async with async_session() as session:
+        result = await session.execute(
+            select(ItemModel)
+            .where(ItemModel.spider_name == name)
+            .order_by(ItemModel.crawled_at.desc())
+            .limit(limit)
+        )
+        items = result.scalars().all()
+
+    if not items:
+        click.echo(f"爬虫 {name} 暂无数据")
+        return
+
+    if fmt == "json":
+        data = [i.data for i in items]
+        click.echo(json.dumps(data, ensure_ascii=False, indent=2))
+    elif fmt == "jsonl":
+        for i in items:
+            click.echo(json.dumps(i.data, ensure_ascii=False))
+    elif fmt == "csv":
+        import csv
+        import sys
+        if items:
+            writer = csv.DictWriter(sys.stdout, fieldnames=items[0].data.keys())
+            writer.writeheader()
+            for i in items:
+                writer.writerow(i.data)
+    else:
+        click.echo(f"不支持的格式: {fmt}", err=True)
+
+    click.echo(f"\n# 共 {len(items)} 条", err=True)
+
+
 if __name__ == "__main__":
     main()
