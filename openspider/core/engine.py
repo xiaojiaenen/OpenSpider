@@ -8,7 +8,9 @@ from loguru import logger
 
 from openspider.config import settings
 from openspider.core.registry import SpiderRegistry
+from openspider.core.recovery import RecoveryManager
 from openspider.core.runner import SpiderRunner
+from openspider.core.scheduler import SpiderScheduler
 from openspider.models.spider import SpiderModel, SpiderStatus
 from openspider.models.task import TaskModel, TaskStatus
 from openspider.storage.database import async_session
@@ -25,11 +27,13 @@ class Engine:
 
     def __init__(self):
         self.registry = SpiderRegistry(settings.spiders_dir)
+        self.scheduler = SpiderScheduler(self)
+        self.recovery = RecoveryManager()
         self._runners: dict[str, SpiderRunner] = {}  # spider_name -> runner
         self._file_observer = None
 
     async def initialize(self) -> None:
-        """初始化引擎：扫描爬虫、同步数据库、启动文件监控"""
+        """初始化引擎：扫描爬虫、同步数据库、启动调度器和文件监控"""
         from openspider.storage.database import init_db
         await init_db()
 
@@ -40,11 +44,21 @@ class Engine:
         # 同步到数据库
         await self._sync_spiders_to_db()
 
+        # 崩溃恢复
+        crashed = await self.recovery.check_crashed_tasks()
+        if crashed:
+            logger.warning(f"发现 {len(crashed)} 个崩溃任务")
+
+        # 启动调度器并同步定时任务
+        self.scheduler.start()
+        await self.scheduler.sync_schedules()
+
         # 启动文件监控
         self._start_file_watcher()
 
     async def shutdown(self) -> None:
-        """关闭引擎：停止所有爬虫、关闭文件监控"""
+        """关闭引擎：停止调度器、停止所有爬虫、关闭文件监控"""
+        self.scheduler.shutdown()
         for name in list(self._runners.keys()):
             await self.stop_spider(name)
         self._stop_file_watcher()

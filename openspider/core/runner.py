@@ -8,6 +8,7 @@ from datetime import datetime
 
 from loguru import logger
 
+from openspider.core.recovery import RecoveryManager
 from openspider.models.spider import SpiderStatus
 from openspider.models.task import TaskStatus
 from openspider.spiders.base import BaseSpider
@@ -35,6 +36,7 @@ class SpiderRunner:
         self.items_scraped = 0
         self.requests_made = 0
         self.errors_count = 0
+        self.retry_count = 0
 
     @property
     def is_running(self) -> bool:
@@ -101,6 +103,23 @@ class SpiderRunner:
             logger.error(f"爬虫异常: {spider.name}: {e}")
             self.errors_count += 1
             await spider.on_error(e)
+
+            # 重试逻辑
+            if self.retry_count < spider.max_retries:
+                self.retry_count += 1
+                backoff = RecoveryManager.calculate_backoff(
+                    self.retry_count, spider.retry_delay
+                )
+                logger.info(
+                    f"爬虫 {spider.name} 将在 {backoff}s 后重试 "
+                    f"({self.retry_count}/{spider.max_retries})"
+                )
+                await self._update_task_status(TaskStatus.RUNNING, str(e))
+                await asyncio.sleep(backoff)
+                if not self._stop_event.is_set():
+                    await self._run()  # 递归重试
+                return
+
             await self._update_task_status(TaskStatus.FAILED, str(e))
 
         finally:
