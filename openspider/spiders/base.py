@@ -76,6 +76,11 @@ class BaseSpider:
     adaptive: bool = False
     adaptive_storage: str | None = None
 
+    # === 数据管道 ===
+    schema: dict = {}                  # 数据 schema（字段名→类型），用于自动建表
+    primary_key: list[str] = []        # 主键字段列表，有主键则 upsert，无则追加
+    sinks: list[dict] = []             # 数据输出目标，如 [{"type":"csv","path":"./data/out.csv"}]
+
     # === 开发模式 ===
     development_mode: bool = False  # 缓存响应到磁盘，开发调试用
 

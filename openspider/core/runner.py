@@ -27,10 +27,12 @@ class SpiderRunner:
     - 浏览器 session 管理（Stealthy/Dynamic）
     """
 
-    def __init__(self, spider_instance: BaseSpider, task_id: int, db_session_factory):
+    def __init__(self, spider_instance: BaseSpider, task_id: int, db_session_factory,
+                 user_id: str | None = None):
         self.spider = spider_instance
         self.task_id = task_id
         self.db_session_factory = db_session_factory
+        self._user_id = user_id
         self._stop_event = asyncio.Event()
         self._task: asyncio.Task | None = None
 
@@ -80,14 +82,20 @@ class SpiderRunner:
         logger.info(f"爬虫启动: {spider.name}")
         await self._log(LogLevel.INFO, f"爬虫启动: {spider.name}")
 
+        # 初始化数据管道
+        from openspider.core.pipeline import Pipeline
+        pipeline = Pipeline.from_spider(spider, user_id=getattr(self, '_user_id', None))
+        await pipeline.open()
+
         try:
             spider._stop_event = self._stop_event
             await spider.on_start()
 
             # 统一走 Scrapling Spider
-            await self._run_with_scrapling(spider)
+            await self._run_with_scrapling(spider, pipeline)
 
             await spider.on_complete()
+            await pipeline.flush()
             await self._log(LogLevel.INFO, f"爬虫完成: {spider.name}, 数据: {self.items_scraped}")
             await self._update_task_status(TaskStatus.COMPLETED)
 
@@ -116,9 +124,10 @@ class SpiderRunner:
             await self._update_task_status(TaskStatus.FAILED, str(e))
 
         finally:
+            await pipeline.close()
             logger.info(f"爬虫结束: {spider.name} | 数据: {self.items_scraped} | 请求: {self.requests_made} | 错误: {self.errors_count}")
 
-    async def _run_with_scrapling(self, spider: BaseSpider) -> None:
+    async def _run_with_scrapling(self, spider: BaseSpider, pipeline=None) -> None:
         """统一通过 Scrapling Spider 执行
 
         简单模式：run() 包装为 parse()
@@ -139,6 +148,9 @@ class SpiderRunner:
                     processed = await spider.on_item_scraped(item_data)
                     if processed is not None:
                         await self._save_item(processed)
+                        # 分发到管道
+                        if pipeline:
+                            await pipeline.process(processed)
                         self.items_scraped += 1
 
         self.requests_made = getattr(result, 'total_requests', 0) or self.requests_made

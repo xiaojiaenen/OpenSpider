@@ -111,7 +111,7 @@ class Engine:
         # 创建并启动执行器
         spider_instance = spider_cls()
         spider_instance.params = params or {}
-        runner = SpiderRunner(spider_instance, task_id, async_session)
+        runner = SpiderRunner(spider_instance, task_id, async_session, user_id=user_id)
         self._runners[name] = runner
         await runner.start()
 
