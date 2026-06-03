@@ -13,6 +13,7 @@ from openspider.models.spider import SpiderModel
 from openspider.models.task import TaskModel
 from openspider.models.item import ItemModel
 from openspider.models.log import LogModel
+from openspider.models.schedule import ScheduleModel
 
 config = context.config
 config.set_main_option("sqlalchemy.url", settings.sync_database_url)
