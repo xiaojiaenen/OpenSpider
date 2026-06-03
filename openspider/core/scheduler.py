@@ -35,20 +35,38 @@ class SpiderScheduler:
             logger.info("任务调度器已关闭")
 
     async def sync_schedules(self) -> None:
-        """同步所有爬虫的调度计划"""
+        """同步所有调度计划（静态 + 动态）"""
+        # 静态调度：从爬虫类属性
         for name, cls in self.engine.registry.spiders.items():
             schedule = getattr(cls, "schedule", None)
             if schedule:
                 self.add_schedule(name, schedule)
 
-    def add_schedule(self, spider_name: str, cron_expression: str) -> None:
-        """添加或更新爬虫的定时调度
+        # 动态调度：从数据库
+        try:
+            from openspider.models.schedule import ScheduleModel, ScheduleStatus
+            from openspider.storage.database import async_session
+            from sqlalchemy import select
+
+            async with async_session() as session:
+                result = await session.execute(
+                    select(ScheduleModel).where(ScheduleModel.status == ScheduleStatus.ENABLED)
+                )
+                for s in result.scalars().all():
+                    self.add_schedule(s.spider_name, s.cron, schedule_id=s.id)
+        except Exception as e:
+            logger.warning(f"加载动态调度失败: {e}")
+
+    def add_schedule(self, spider_name: str, cron_expression: str,
+                     schedule_id: int | None = None) -> None:
+        """添加或更新定时调度
 
         Args:
             spider_name: 爬虫名称
-            cron_expression: cron 表达式，格式如 "0 */6 * * *"（每6小时）
+            cron_expression: cron 表达式
+            schedule_id: 数据库调度记录 ID（动态调度用）
         """
-        # 移除旧任务
+        job_id = f"schedule_{schedule_id}" if schedule_id else f"spider_{spider_name}"
         self.remove_schedule(spider_name)
 
         try:
@@ -56,8 +74,8 @@ class SpiderScheduler:
             job = self._scheduler.add_job(
                 self._trigger_spider,
                 trigger=trigger,
-                args=[spider_name],
-                id=f"spider_{spider_name}",
+                args=[spider_name, schedule_id],
+                id=job_id,
                 name=f"定时爬虫: {spider_name}",
                 replace_existing=True,
             )
@@ -91,16 +109,48 @@ class SpiderScheduler:
             })
         return result
 
-    async def _trigger_spider(self, spider_name: str) -> None:
+    async def _trigger_spider(self, spider_name: str, schedule_id: int | None = None) -> None:
         """调度触发回调"""
-        # 检查是否已在运行
         runner = self.engine._runners.get(spider_name)
         if runner and runner.is_running:
             logger.info(f"爬虫 {spider_name} 已在运行，跳过本次调度")
             return
 
         try:
-            await self.engine.start_spider(spider_name)
+            # 读取调度的 params
+            params = {}
+            if schedule_id:
+                from openspider.models.schedule import ScheduleModel
+                from openspider.storage.database import async_session
+                from sqlalchemy import select
+                async with async_session() as session:
+                    result = await session.execute(
+                        select(ScheduleModel).where(ScheduleModel.id == schedule_id)
+                    )
+                    schedule = result.scalar_one_or_none()
+                    if schedule:
+                        params = schedule.params or {}
+
+            await self.engine.start_spider(spider_name, params=params)
             logger.info(f"调度触发爬虫: {spider_name}")
+
+            # 更新调度记录
+            if schedule_id:
+                from datetime import datetime
+                from openspider.models.schedule import ScheduleModel
+                from openspider.storage.database import async_session
+                from sqlalchemy import update
+                async with async_session() as session:
+                    await session.execute(
+                        update(ScheduleModel)
+                        .where(ScheduleModel.id == schedule_id)
+                        .values(
+                            last_run=datetime.utcnow(),
+                            last_status="triggered",
+                            run_count=ScheduleModel.run_count + 1,
+                        )
+                    )
+                    await session.commit()
+
         except Exception as e:
             logger.error(f"调度触发失败: {spider_name}: {e}")
