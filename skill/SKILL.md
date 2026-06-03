@@ -1,46 +1,46 @@
 ---
 name: openspider
 description: |
-  Manage web scrapers through the OpenSpider platform. Use this skill when the user wants to create, run, stop, monitor, or export data from web scrapers. Also use when they mention crawling websites, scraping data, building spiders, automating data collection, or need to manage multiple scraping tasks. Even if they just say "I need to get data from this website" or "help me scrape X", this is the right skill.
+  通过 OpenSpider 平台管理爬虫。当用户想要创建、运行、停止、监控爬虫或导出爬取数据时使用此 Skill。当用户提到爬取网站、抓取数据、编写爬虫、自动化数据采集、管理多个爬虫任务时，都应使用此 Skill。即使用户只是说"我需要从这个网站获取数据"或"帮我抓取 X"，也应该使用此 Skill。
 ---
 
-# OpenSpider
+# OpenSpider 爬虫管理平台
 
-OpenSpider is a spider management platform. It manages the full lifecycle of multiple scrapers — registration, start/stop, pause/resume, failure recovery, scheduling, data export — and exposes everything through a standard HTTP API.
+OpenSpider 是一个爬虫管理平台，管理多个爬虫的完整生命周期——注册、启停、暂停恢复、失败重试、定时调度、数据导出，通过标准 HTTP API 暴露所有能力。
 
-Your job is to help the user create spider code, upload it to the platform, manage running spiders, and retrieve scraped data.
+你的职责是帮助用户编写爬虫代码、上传到平台、管理运行中的爬虫、获取爬取数据。
 
-## Quick Reference
+## 快速参考
 
-**API base**: `http://localhost:8088` (configurable)
-**API docs**: `http://localhost:8088/docs`
+**API 地址**：`http://localhost:8088`
+**API 文档**：`http://localhost:8088/docs`
 
-## Core Workflow
+## 核心流程
 
-When the user asks to scrape a website, follow this sequence:
+当用户要求爬取某个网站时，按以下步骤执行：
 
-1. **Analyze the target** — fetch the page, inspect its structure, identify what data to extract and what selectors to use. Check if the site uses JavaScript rendering, anti-bot protection, or non-UTF-8 encoding.
-2. **Write the spider** — create a `.py` file that inherits `BaseSpider` and implements `run()`. Match the site's characteristics: use `use_stealth=True` for protected sites, set `encoding` for old sites with GBK/Big5, etc.
-3. **Upload** — `POST /spiders/upload` with the `.py` file.
-4. **Start** — `POST /spiders/{name}/start`.
-5. **Monitor** — poll `GET /tasks?spider={name}` until status is `completed` or `failed`.
-6. **Retrieve** — `GET /items?spider={name}` for data, `GET /tasks/{id}/logs` for errors.
+1. **分析目标** — 抓取页面，检查结构，确定要提取的数据和选择器。判断网站是否使用 JS 渲染、是否有反爬机制、是否使用非 UTF-8 编码。
+2. **编写爬虫** — 创建 `.py` 文件，继承 `BaseSpider`，实现 `run()` 方法。根据网站特性配置：反爬站设 `use_stealth=True`，老站点设 `encoding`，SPA 站点用 `capture_xhr` 等。
+3. **上传** — `POST /spiders/upload` 上传 `.py` 文件。
+4. **启动** — `POST /spiders/{name}/start`。
+5. **监控** — 轮询 `GET /tasks?spider={name}` 直到状态为 `completed` 或 `failed`。
+6. **获取数据** — `GET /items?spider={name}` 获取数据，`GET /tasks/{id}/logs` 查看错误日志。
 
-## Writing Spider Code
+## 编写爬虫代码
 
-All spiders inherit from `BaseSpider` and implement `async def run(self)`.
+所有爬虫继承 `BaseSpider` 并实现 `async def run(self)` 方法。
 
 ```python
 from openspider.spiders.base import BaseSpider
 
 class MySpider(BaseSpider):
-    name = "my_spider"           # Required: unique identifier
-    start_urls = ["https://..."] # Entry URLs
+    name = "my_spider"           # 必填：唯一标识
+    start_urls = ["https://..."] # 入口 URL
 
     async def run(self):
         page = await self.get(self.start_urls[0])
         for item in page.css(".article"):
-            if self.should_stop:  # Check stop signal for graceful exit
+            if self.should_stop:  # 检查停止信号，优雅退出
                 break
             yield {
                 "title": item.css("h2::text").get(""),
@@ -48,94 +48,94 @@ class MySpider(BaseSpider):
             }
 ```
 
-The `run()` method is an async generator. Use `yield` to output scraped data items (dicts). Use `await self.get(url)` or `await self.post(url, data=...)` to fetch pages.
+`run()` 是一个异步生成器，用 `yield` 输出爬取的数据项（字典）。用 `await self.get(url)` 或 `await self.post(url, data=...)` 抓取页面。
 
-### Available Methods
+### 可用方法
 
-| Method | What it does |
-|--------|-------------|
-| `await self.get(url, **kwargs)` | HTTP GET, returns a Scrapling Response object |
-| `await self.post(url, **kwargs)` | HTTP POST, returns a Scrapling Response object |
-| `self.should_stop` | Returns `True` if a stop signal was received |
-| `self.session` | The underlying Scrapling session for advanced use |
+| 方法 | 说明 |
+|------|------|
+| `await self.get(url, **kwargs)` | HTTP GET 请求，返回 Scrapling Response 对象 |
+| `await self.post(url, **kwargs)` | HTTP POST 请求，返回 Scrapling Response 对象 |
+| `self.should_stop` | 返回 `True` 表示收到停止信号 |
+| `self.session` | 底层 Scrapling session，用于高级操作 |
 
-### Lifecycle Hooks
+### 生命周期钩子
 
-| Hook | When it runs |
-|------|-------------|
-| `on_start(resuming=False)` | Before crawling begins. `resuming=True` if resuming from checkpoint. |
-| `on_error(error)` | When an exception occurs during crawling. |
-| `on_complete()` | After crawling finishes (success or failure). |
-| `on_item_scraped(item) -> dict\|None` | Per-item post-processing. Return `None` to drop the item. |
+| 钩子 | 触发时机 |
+|------|----------|
+| `on_start(resuming=False)` | 爬虫启动前。`resuming=True` 表示从断点恢复。 |
+| `on_error(error)` | 爬取过程中发生异常时。 |
+| `on_complete()` | 爬取完成后（无论成功或失败）。 |
+| `on_item_scraped(item) -> dict\|None` | 每条数据后处理。返回 `None` 丢弃该条。 |
 
-### Key Configuration Attributes
+### 关键配置属性
 
-These are class-level attributes you set on the spider class.
+这些是设置在爬虫类上的类属性。
 
-**Basic:**
+**基本配置：**
 
-| Attribute | Type | Default | Purpose |
-|-----------|------|---------|---------|
-| `name` | str | required | Unique spider identifier |
-| `description` | str | `""` | Human-readable description |
-| `start_urls` | list[str] | `[]` | Entry point URLs |
-| `schedule` | str | `None` | Cron expression (e.g. `"0 */6 * * *"`) for scheduled runs |
-| `max_retries` | int | `3` | Retry count on failure |
-| `retry_delay` | int | `60` | Seconds between retries (exponential backoff applied) |
-| `concurrent_requests` | int | `4` | Max parallel requests |
-| `download_delay` | float | `0.5` | Seconds between requests |
-| `proxies` | list[str] | `[]` | Proxy list |
+| 属性 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `name` | str | 必填 | 爬虫唯一标识 |
+| `description` | str | `""` | 爬虫描述 |
+| `start_urls` | list[str] | `[]` | 入口 URL 列表 |
+| `schedule` | str | `None` | cron 表达式，如 `"0 */6 * * *"`（每6小时） |
+| `max_retries` | int | `3` | 失败重试次数 |
+| `retry_delay` | int | `60` | 重试间隔秒数（自动指数退避） |
+| `concurrent_requests` | int | `4` | 最大并发请求数 |
+| `download_delay` | float | `0.5` | 请求间隔秒数 |
+| `proxies` | list[str] | `[]` | 代理列表 |
 
-**Anti-bot and browser:**
+**反爬与浏览器：**
 
-| Attribute | Type | Default | Purpose |
-|-----------|------|---------|---------|
-| `use_stealth` | bool | `False` | Use stealth browser mode (bypasses Cloudflare etc.) |
-| `impersonate` | str | `"chrome"` | TLS fingerprint to impersonate (`chrome`/`firefox`/`safari`/`edge`) |
-| `solve_cloudflare` | bool | `False` | Auto-solve Cloudflare challenges (needs `use_stealth=True`) |
-| `block_webrtc` | bool | `False` | Block WebRTC to prevent IP leaks |
-| `hide_canvas` | bool | `False` | Add canvas noise to prevent fingerprinting |
-| `real_chrome` | bool | `False` | Use real Chrome instead of bundled Chromium |
-| `block_ads` | bool | `False` | Block ~3500 ad/tracker domains |
-| `capture_xhr` | str | `None` | Regex to capture XHR/fetch responses (for SPAs) |
-| `max_pages` | int | `1` | Browser tab pool size for concurrent fetching |
+| 属性 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `use_stealth` | bool | `False` | 使用隐身浏览器模式（可绕过 Cloudflare 等） |
+| `impersonate` | str | `"chrome"` | TLS 指纹伪装（`chrome`/`firefox`/`safari`/`edge`） |
+| `solve_cloudflare` | bool | `False` | 自动破解 Cloudflare 挑战（需配合 `use_stealth=True`） |
+| `block_webrtc` | bool | `False` | 阻断 WebRTC 防止真实 IP 泄露 |
+| `hide_canvas` | bool | `False` | Canvas 噪声防止指纹追踪 |
+| `real_chrome` | bool | `False` | 使用设备上真实 Chrome 而非内置 Chromium |
+| `block_ads` | bool | `False` | 屏蔽约 3500 个广告/追踪域名 |
+| `capture_xhr` | str | `None` | XHR/Fetch 拦截的 URL 正则（用于 SPA 站点） |
+| `max_pages` | int | `1` | 浏览器标签页池大小 |
 
-**Site compatibility (for old/problematic sites):**
+**网站兼容（老旧/问题站点）：**
 
-| Attribute | Type | Default | Purpose |
-|-----------|------|---------|---------|
-| `encoding` | str | `None` | Force encoding (e.g. `"gbk"`, `"big5"`, `"shift_jis"`) |
-| `ssl_verify` | bool | `True` | Skip SSL verification for sites with bad certs |
-| `timeout` | int | `30` | Request timeout in seconds |
-| `default_headers` | dict | `{}` | Custom default headers |
-| `cookies` | dict | `{}` | Pre-set cookies |
-| `network_idle` | bool | `False` | Wait for network idle before returning (JS-heavy sites) |
-| `wait_selector` | str | `None` | CSS selector to wait for before returning |
-| `wait` | int | `0` | Extra wait time in ms after page load |
+| 属性 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `encoding` | str | `None` | 强制编码（如 `"gbk"`、`"big5"`、`"shift_jis"`） |
+| `ssl_verify` | bool | `True` | 跳过 SSL 证书验证 |
+| `timeout` | int | `30` | 请求超时秒数 |
+| `default_headers` | dict | `{}` | 自定义默认请求头 |
+| `cookies` | dict | `{}` | 预设 Cookie |
+| `network_idle` | bool | `False` | 等待网络空闲再返回（JS 重度站点） |
+| `wait_selector` | str | `None` | 等待指定 CSS 选择器出现再返回 |
+| `wait` | int | `0` | 页面加载后额外等待毫秒数 |
 
-**Adaptive scraping:**
+**自适应爬取：**
 
-| Attribute | Type | Default | Purpose |
-|-----------|------|---------|---------|
-| `adaptive` | bool | `False` | Enable adaptive selectors — auto-relocate elements after site redesigns |
+| 属性 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `adaptive` | bool | `False` | 启用自适应选择器——网站改版后自动定位元素 |
 
-## Choosing the Right Mode
+## 模式选择
 
-Use this decision tree when writing a spider:
+编写爬虫时，根据网站特性选择合适的模式：
 
-- **Static HTML, no JS needed** → default mode (no special flags)
-- **Content loaded by JavaScript** → `network_idle=True` or `wait_selector=".content"`
-- **Anti-bot protection (Cloudflare, etc.)** → `use_stealth=True`, `solve_cloudflare=True`
-- **SPA that loads data via API calls** → `capture_xhr=r"https://api\.example\.com/.*"` to intercept XHR
-- **Old site with GBK/Big5 encoding** → `encoding="gbk"`
-- **Site with expired SSL cert** → `ssl_verify=False`
-- **Need to appear as real browser** → `use_stealth=True`, `real_chrome=True`, `block_webrtc=True`
+- **静态 HTML，不需要 JS** → 默认模式（不设特殊标志）
+- **内容由 JS 动态加载** → `network_idle=True` 或 `wait_selector=".content"`
+- **有反爬保护（Cloudflare 等）** → `use_stealth=True`，`solve_cloudflare=True`
+- **SPA 通过 API 加载数据** → `capture_xhr=r"https://api\.example\.com/.*"` 拦截 XHR
+- **老旧站点使用 GBK/Big5 编码** → `encoding="gbk"`
+- **SSL 证书过期的站点** → `ssl_verify=False`
+- **需要模拟真实浏览器** → `use_stealth=True`，`real_chrome=True`，`block_webrtc=True`
 
-## Template Spiders
+## 模板爬虫
 
-For common crawling patterns, use these templates instead of writing from scratch:
+对于常见的爬取模式，使用模板爬虫避免重复代码：
 
-### RuleSpider (follow links by pattern)
+### RuleSpider（按规则跟进链接）
 
 ```python
 from openspider.spiders.templates import RuleSpider
@@ -148,14 +148,14 @@ class BlogCrawler(RuleSpider):
     def rules(self):
         return [
             CrawlRule(LinkExtractor(allow=r"/posts/"), callback=self.parse_post),
-            CrawlRule(LinkExtractor(allow=r"/page/\d+/")),  # follow only, no callback
+            CrawlRule(LinkExtractor(allow=r"/page/\d+/")),  # 只跟进，不解析
         ]
 
     async def parse_post(self, response):
         yield {"title": response.css("h1::text").get("")}
 ```
 
-### SitemapRuleSpider (crawl from sitemap.xml)
+### SitemapRuleSpider（从 sitemap.xml 驱动爬取）
 
 ```python
 from openspider.spiders.templates import SitemapRuleSpider
@@ -174,58 +174,58 @@ class ProductSitemap(SitemapRuleSpider):
         yield {"name": response.css("h1::text").get(""), "price": response.css(".price::text").get("")}
 ```
 
-## API Endpoints
+## API 接口
 
-### Spider Management
-
-```
-GET    /spiders                  # List all spiders
-GET    /spiders/{name}           # Spider details
-POST   /spiders/{name}/start     # Start spider
-POST   /spiders/{name}/stop      # Stop spider
-POST   /spiders/{name}/pause     # Pause spider (resumable)
-DELETE /spiders/{name}           # Delete spider (stops first if running)
-POST   /spiders/upload           # Upload spider .py file
-```
-
-### Tasks
+### 爬虫管理
 
 ```
-GET    /tasks                    # Task list (?spider=&status=)
-GET    /tasks/{id}               # Task details
-GET    /tasks/{id}/logs          # Task logs
+GET    /spiders                  # 列出所有爬虫
+GET    /spiders/{name}           # 爬虫详情
+POST   /spiders/{name}/start     # 启动爬虫
+POST   /spiders/{name}/stop      # 停止爬虫
+POST   /spiders/{name}/pause     # 暂停爬虫（可恢复）
+DELETE /spiders/{name}           # 删除爬虫（运行中会先停止）
+POST   /spiders/upload           # 上传 .py 爬虫文件
 ```
 
-### Data
+### 任务查询
 
 ```
-GET    /items                    # Query scraped data (?spider=&task_id=&page=&page_size=)
-GET    /export/{name}            # Export data (?format=json|jsonl|csv)
+GET    /tasks                    # 任务列表（?spider=&status=）
+GET    /tasks/{id}               # 任务详情
+GET    /tasks/{id}/logs          # 任务日志
 ```
 
-### System
+### 数据
 
 ```
-GET    /health                   # Health check (MySQL status, active spiders)
-GET    /capabilities             # Full platform capability description (for AI integration)
+GET    /items                    # 查询爬取数据（?spider=&task_id=&page=&page_size=）
+GET    /export/{name}            # 导出数据（?format=json|jsonl|csv）
 ```
 
-## CLI Commands
+### 系统
+
+```
+GET    /health                   # 健康检查（MySQL 状态、活跃爬虫数）
+GET    /capabilities             # 平台能力描述（供 AI 集成使用）
+```
+
+## CLI 命令
 
 ```bash
-openspider serve                  # Start API server + scheduler + file watcher
-openspider list                   # List all registered spiders
-openspider start <name>           # Start a spider
-openspider stop <name>            # Stop a spider
-openspider info <name>            # Show spider details
-openspider add <file.py>          # Register a new spider file
-openspider validate <file.py>     # Validate spider file without registering
+openspider serve                  # 启动平台（API + 调度器 + 文件监控）
+openspider list                   # 列出所有爬虫
+openspider start <name>           # 启动爬虫
+openspider stop <name>            # 停止爬虫
+openspider info <name>            # 查看爬虫详情
+openspider add <file.py>          # 注册新爬虫文件
+openspider validate <file.py>     # 校验爬虫文件（不注册）
 ```
 
-## Helper Utilities
+## 辅助工具
 
-These utilities are available in `openspider/utils/` for use in spider code:
+以下工具模块位于 `openspider/utils/`，可在爬虫代码中使用：
 
-- **`openspider.utils.form`** — `extract_form_fields(response)`, `extract_hidden_fields(response)`, `extract_asp_viewstate(response)`, `merge_form_data(hidden, user_data)` — for ASP.NET/JSP/PHP form submissions
-- **`openspider.utils.url`** — `strip_jsessionid(url)`, `resolve_url(base, relative)`, `normalize_url(url)` — URL manipulation
-- **`openspider.utils.selector`** — `find_by_text(response, text)`, `find_by_regex(response, pattern)`, `find_similar(response, element)` — enhanced element finding beyond CSS/XPath
+- **`openspider.utils.form`** — `extract_form_fields(response)` 提取表单字段、`extract_hidden_fields(response)` 提取隐藏字段、`extract_asp_viewstate(response)` 提取 ASP.NET ViewState、`merge_form_data(hidden, user_data)` 合并表单数据 — 用于 ASP.NET/JSP/PHP 表单提交
+- **`openspider.utils.url`** — `strip_jsessionid(url)` 剥离 jsessionid、`resolve_url(base, relative)` 相对 URL 拼接、`normalize_url(url)` URL 规范化
+- **`openspider.utils.selector`** — `find_by_text(response, text)` 按文本查找、`find_by_regex(response, pattern)` 按正则查找、`find_similar(response, element)` 查找相似元素 — CSS/XPath 之外的增强查找方式
