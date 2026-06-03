@@ -41,10 +41,12 @@ app = FastAPI(
 # 注册路由和错误处理
 from openspider.api.routes import router, public_router, set_engine
 from openspider.api.error_handler import register_error_handlers
+from openspider.api.websocket import ws_router
 
 set_engine(engine)
 app.include_router(public_router)  # 不需要认证的接口
 app.include_router(router)         # 需要认证的接口
+app.include_router(ws_router)      # WebSocket
 register_error_handlers(app)
 
 
