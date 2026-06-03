@@ -30,6 +30,7 @@ class QuotesSpider(BaseSpider):
             # 翻页
             next_btn = page.css("li.next a")
             if next_btn:
-                url = self.start_urls[0].rstrip("/") + next_btn.attrib.get("href", "")
+                href = next_btn[0].attrib.get("href", "")
+                url = self.start_urls[0].rstrip("/") + href
             else:
                 break
