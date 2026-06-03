@@ -8,6 +8,7 @@ from fastapi import APIRouter, HTTPException, UploadFile, File, Query
 from sqlalchemy import select, func, update
 
 from openspider import __version__
+from openspider.config import settings
 from openspider.api.schemas import (
     HealthResponse,
     SpiderInfo,
