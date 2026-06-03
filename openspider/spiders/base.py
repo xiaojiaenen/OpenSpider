@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from collections.abc import AsyncGenerator, Callable
 from typing import TYPE_CHECKING
 
@@ -71,6 +72,10 @@ class BaseSpider:
     adaptive: bool = False               # 启用自适应选择器
     adaptive_storage: str | None = None  # 自适应数据库路径
 
+    # === 运行时参数 ===
+    params: dict = {}                    # 运行时参数（通过 API/CLI 传入）
+    _env_overrides: dict = {}            # 环境变量覆盖（测试用）
+
     # === 运行时注入属性（由 Runner 设置） ===
     _session: object | None = None       # Scrapling session 实例
     _stop_event: asyncio.Event | None = None
@@ -129,6 +134,22 @@ class BaseSpider:
         if self._stop_event is None:
             return False
         return self._stop_event.is_set()
+
+    def env(self, key: str, default: str | None = None) -> str | None:
+        """读取环境变量
+
+        用于获取敏感参数（API Key、密码等），不走 API，不入库。
+
+        Args:
+            key: 环境变量名
+            default: 默认值
+
+        Returns:
+            环境变量值，未找到返回 default
+        """
+        if key in self._env_overrides:
+            return self._env_overrides[key]
+        return os.environ.get(key, default)
 
     async def get(self, url: str, **kwargs) -> Response:
         """HTTP GET 请求

@@ -14,6 +14,7 @@ from openspider.api.schemas import (
     HealthResponse,
     SpiderInfo,
     SpiderListResponse,
+    SpiderStartRequest,
     SpiderActionResponse,
     SpiderUploadResponse,
     TaskInfo,
@@ -120,11 +121,11 @@ async def get_spider(name: str):
 
 
 @router.post("/spiders/{name}/start", response_model=SpiderActionResponse)
-async def start_spider(name: str):
+async def start_spider(name: str, body: SpiderStartRequest = SpiderStartRequest()):
     """启动爬虫"""
     engine = get_engine()
     try:
-        task = await engine.start_spider(name)
+        task = await engine.start_spider(name, params=body.params)
         return SpiderActionResponse(
             success=True,
             message=f"爬虫 {name} 已启动",
@@ -242,6 +243,7 @@ async def list_tasks(
                 requests_made=t.requests_made,
                 errors_count=t.errors_count,
                 error_message=t.error_message,
+                params=t.params,
             )
             for t in tasks
         ],
@@ -270,6 +272,7 @@ async def get_task(task_id: int):
         requests_made=task.requests_made,
         errors_count=task.errors_count,
         error_message=task.error_message,
+        params=task.params,
     )
 
 

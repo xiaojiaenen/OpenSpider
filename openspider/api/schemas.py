@@ -28,6 +28,11 @@ class SpiderListResponse(BaseModel):
     total: int
 
 
+class SpiderStartRequest(BaseModel):
+    """启动爬虫请求"""
+    params: dict = {}  # 运行时参数
+
+
 class SpiderActionResponse(BaseModel):
     """爬虫操作响应"""
     success: bool
@@ -55,6 +60,7 @@ class TaskInfo(BaseModel):
     requests_made: int = 0
     errors_count: int = 0
     error_message: str | None = None
+    params: dict | None = None
 
 
 class TaskListResponse(BaseModel):

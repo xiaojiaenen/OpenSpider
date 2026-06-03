@@ -58,6 +58,42 @@ class MySpider(BaseSpider):
 | `await self.post(url, **kwargs)` | HTTP POST 请求，返回 Scrapling Response 对象 |
 | `self.should_stop` | 返回 `True` 表示收到停止信号 |
 | `self.session` | 底层 Scrapling session，用于高级操作 |
+| `self.env(key, default=None)` | 读取环境变量（用于 API Key、密码等敏感参数） |
+| `self.params` | 运行时参数字典（通过 API/CLI 传入） |
+
+### 三层参数体系
+
+爬虫参数分三层，各有适用场景：
+
+**第一层：静态配置** — 写在类属性上，不常变：
+```python
+class MySpider(BaseSpider):
+    name = "my_spider"
+    concurrent_requests = 4
+    use_stealth = True
+    encoding = "gbk"
+```
+
+**第二层：运行时参数** — 每次启动可不同，通过 API 或 CLI 传入：
+```python
+class SearchSpider(BaseSpider):
+    name = "search"
+    async def run(self):
+        keyword = self.params.get("keyword", "default")
+        max_pages = int(self.params.get("max_pages", "10"))
+```
+API 调用：`POST /spiders/search/start` Body: `{"params": {"keyword": "Python", "max_pages": "5"}}`
+CLI 调用：`openspider start search -p keyword=Python -p max_pages=5`
+
+**第三层：敏感参数** — 通过环境变量传入，不走 API，不入库：
+```python
+class ApiSpider(BaseSpider):
+    name = "api_spider"
+    async def run(self):
+        api_key = self.env("API_KEY")
+        secret = self.env("SECRET", "default_value")
+```
+启动时设置：`API_KEY=xxx openspider start api_spider`
 
 ### 生命周期钩子
 
@@ -181,7 +217,7 @@ class ProductSitemap(SitemapRuleSpider):
 ```
 GET    /spiders                  # 列出所有爬虫
 GET    /spiders/{name}           # 爬虫详情
-POST   /spiders/{name}/start     # 启动爬虫
+POST   /spiders/{name}/start     # 启动爬虫（Body: {"params": {"key": "value"}}）
 POST   /spiders/{name}/stop      # 停止爬虫
 POST   /spiders/{name}/pause     # 暂停爬虫（可恢复）
 DELETE /spiders/{name}           # 删除爬虫（运行中会先停止）

@@ -4,6 +4,7 @@ import enum
 from datetime import datetime
 
 from sqlalchemy import BigInteger, DateTime, Enum, Integer, String, Text, func
+from sqlalchemy.dialects.mysql import JSON
 from sqlalchemy.orm import Mapped, mapped_column
 
 from openspider.storage.database import Base
@@ -35,6 +36,7 @@ class TaskModel(Base):
     errors_count: Mapped[int] = mapped_column(Integer, default=0)
     retry_count: Mapped[int] = mapped_column(Integer, default=0)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    params: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     crawldir: Mapped[str | None] = mapped_column(String(512), nullable=True)
     executor_node: Mapped[str | None] = mapped_column(String(128), nullable=True)
     created_at: Mapped[datetime] = mapped_column(

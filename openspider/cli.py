@@ -41,13 +41,19 @@ async def _list_spiders():
 
 @main.command()
 @click.argument("name")
-def start(name):
+@click.option("--param", "-p", multiple=True, help="运行时参数，格式 key=value")
+def start(name, param):
     """启动指定爬虫"""
     import asyncio
-    asyncio.run(_start_spider(name))
+    params = {}
+    for p in param:
+        if "=" in p:
+            k, v = p.split("=", 1)
+            params[k] = v
+    asyncio.run(_start_spider(name, params))
 
 
-async def _start_spider(name: str):
+async def _start_spider(name: str, params: dict):
     from openspider.core.engine import Engine
     from openspider.storage.database import init_db
 
@@ -55,7 +61,7 @@ async def _start_spider(name: str):
     engine = Engine()
     engine.registry.scan_directory()
     try:
-        task = await engine.start_spider(name)
+        task = await engine.start_spider(name, params=params)
         click.echo(f"爬虫 {name} 已启动，任务ID: {task.id}")
         # 等待爬虫完成
         if name in engine._runners:
