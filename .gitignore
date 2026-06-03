@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environment
+.venv/
+venv/
+env/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Environment
+.env
+.env.local
+
+# Data
+crawl_data/
+*.db
+*.sqlite3
+
+# Logs
+logs/
+
+# Scrapling cache
+.scrapling_cache/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Claude
+.claude/

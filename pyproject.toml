@@ -1,0 +1,37 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "openspider"
+version = "0.1.0"
+description = "OpenSpider - 爬虫管理平台"
+requires-python = ">=3.10"
+dependencies = [
+    "scrapling[all]>=0.4.8",
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.27",
+    "sqlalchemy[asyncio]>=2.0",
+    "aiomysql>=0.2",
+    "alembic>=1.13",
+    "apscheduler>=3.10,<4.0",
+    "watchdog>=3.0",
+    "click>=8.0",
+    "loguru>=0.7",
+    "charset-normalizer>=3.0",
+    "pydantic>=2.0",
+    "pydantic-settings>=2.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "httpx>=0.27",
+]
+
+[project.scripts]
+openspider = "openspider.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["openspider"]
