@@ -35,7 +35,7 @@ class BaseSpider:
     proxies: list[str] = []
 
     # === 网站兼容性 ===
-    encoding: str | None = None
+    # encoding 由 Scrapling 自动检测处理，不需要手动指定
     ssl_verify: bool = True
     follow_redirects: bool = True
     timeout: int = 30
@@ -244,11 +244,5 @@ class BaseSpider:
             merged["cookies"] = {**self.cookies, **kwargs.get("cookies", {})}
         if self.follow_redirects is False:
             merged.setdefault("follow_redirects", False)
-        if self.proxies and "proxy" not in kwargs and "proxy_rotator" not in kwargs:
-            from scrapling.fetchers import ProxyRotator
-            if len(self.proxies) > 1:
-                merged["proxy_rotator"] = ProxyRotator(self.proxies)
-            else:
-                merged["proxy"] = self.proxies[0]
         merged.update(kwargs)
         return merged

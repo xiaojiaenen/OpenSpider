@@ -1,7 +1,7 @@
 """模板爬虫 — RuleSpider、SitemapRuleSpider
 
 包装 Scrapling 的 CrawlSpider / SitemapSpider，
-正确转发用户配置，支持暂停恢复（crawldir）。
+正确转发全部配置，实现 configure_sessions()。
 """
 
 from __future__ import annotations
@@ -12,10 +12,51 @@ from collections.abc import AsyncGenerator
 from openspider.spiders.base import BaseSpider
 
 
+def _build_session_kwargs(spider: BaseSpider) -> dict:
+    """从 BaseSpider 构建 FetcherSession 参数"""
+    kwargs = {
+        "impersonate": spider.impersonate,
+        "http3": spider.http3,
+        "stealthy_headers": spider.stealthy_headers,
+        "verify": spider.ssl_verify,
+        "timeout": spider.timeout,
+    }
+    if spider.default_headers:
+        kwargs["headers"] = spider.default_headers
+    if spider.cookies:
+        kwargs["cookies"] = spider.cookies
+    return kwargs
+
+
+def _build_stealth_kwargs(spider: BaseSpider) -> dict:
+    """从 BaseSpider 构建 AsyncStealthySession 参数"""
+    return {
+        "headless": True,
+        "solve_cloudflare": spider.solve_cloudflare,
+        "block_webrtc": spider.block_webrtc,
+        "hide_canvas": spider.hide_canvas,
+        "allow_webgl": spider.allow_webgl,
+        "real_chrome": spider.real_chrome,
+        "cdp_url": spider.cdp_url,
+        "user_data_dir": spider.user_data_dir,
+        "max_pages": spider.max_pages,
+        "block_ads": spider.block_ads,
+        "dns_over_https": spider.dns_over_https,
+        "locale": spider.locale,
+        "timezone_id": spider.timezone_id,
+        "wait": spider.wait,
+        "disable_resources": spider.disable_resources,
+        "network_idle": spider.network_idle,
+        "load_dom": spider.load_dom,
+        "wait_selector": spider.wait_selector,
+        "wait_selector_state": spider.wait_selector_state,
+        "init_script": spider.init_script,
+        "capture_xhr": spider.capture_xhr,
+    }
+
+
 class RuleSpider(BaseSpider):
     """规则驱动爬虫（包装 Scrapling CrawlSpider）
-
-    通过 rules() 声明链接跟进规则。
 
     示例：
         class BlogCrawler(RuleSpider):
@@ -25,7 +66,6 @@ class RuleSpider(BaseSpider):
             def rules(self):
                 return [
                     CrawlRule(LinkExtractor(allow=r"/posts/"), callback=self.parse_post),
-                    CrawlRule(LinkExtractor(allow=r"/page/\\d+/")),
                 ]
 
             async def parse_post(self, response):
@@ -33,17 +73,12 @@ class RuleSpider(BaseSpider):
     """
 
     def rules(self) -> list:
-        """返回 CrawlRule 列表"""
         raise NotImplementedError(f"{self.__class__.__name__} 必须实现 rules() 方法")
 
     async def run(self) -> AsyncGenerator[dict, None]:
-        """使用 Scrapling CrawlSpider 引擎执行规则"""
         scrapling_spider_cls = self._create_scrapling_spider()
         scrapling_spider = scrapling_spider_cls(crawldir=str(self._get_crawldir()))
-
-        # Scrapling Spider.start() 是同步阻塞的，放到线程池
         result = await asyncio.to_thread(scrapling_spider.start)
-
         if hasattr(result, 'items'):
             for item in result.items:
                 if self.should_stop:
@@ -51,11 +86,23 @@ class RuleSpider(BaseSpider):
                 yield item
 
     def _create_scrapling_spider(self):
-        """动态创建 Scrapling CrawlSpider 子类，正确转发配置"""
-        from scrapling.spiders import CrawlSpider, CrawlRule, LinkExtractor, Response
+        from scrapling.spiders import CrawlSpider, Response
+        from scrapling.fetchers import FetcherSession, AsyncStealthySession, ProxyRotator
 
-        rules_list = self.rules()
         base_self = self
+        rules_list = self.rules()
+        session_kwargs = _build_session_kwargs(self)
+        stealth_kwargs = _build_stealth_kwargs(self)
+
+        if self.proxies:
+            rotator = ProxyRotator(self.proxies) if len(self.proxies) > 1 else None
+            if rotator:
+                if self.use_stealth:
+                    stealth_kwargs["proxy_rotator"] = rotator
+                else:
+                    session_kwargs["proxy_rotator"] = rotator
+            elif self.proxies:
+                session_kwargs["proxy"] = self.proxies[0]
 
         class DynamicCrawlSpider(CrawlSpider):
             name = base_self.name
@@ -65,35 +112,28 @@ class RuleSpider(BaseSpider):
             robots_txt_obey = base_self.robots_txt_obey
             development_mode = base_self.development_mode
 
+            def configure_sessions(self_inner, manager):
+                if base_self.use_stealth:
+                    manager.add("default", AsyncStealthySession(**stealth_kwargs))
+                else:
+                    manager.add("default", FetcherSession(**session_kwargs))
+
             def rules(self_inner):
                 return rules_list
 
-            async def parse(self_inner, response: Response):
-                """桥接：调用用户的 parse()（如果有）或默认行为"""
-                # CrawlSpider 的默认 parse 会根据 rules 分发
-                # 如果用户重写了 parse，需要手动调用
-                user_parse = getattr(base_self, '_user_parse', None)
-                if user_parse:
-                    async for result in user_parse(response):
-                        yield result
-
-        # 绑定用户回调
+        # 正确绑定回调：保留原始 bound method 的引用
         for rule in rules_list:
             if rule.callback and callable(rule.callback):
-                callback_name = rule.callback.__name__
-                # 保存用户的 parse 方法引用
-                if callback_name == 'parse':
-                    base_self._user_parse = rule.callback
-                else:
-                    # 将用户回调绑定到 DynamicSpider
-                    async def make_wrapper(cb):
-                        async def wrapper(self_inner, response):
-                            # 调用用户的回调（base_self 上的方法）
-                            async for result in cb(response):
-                                yield result
-                        return wrapper
-                    # 注意：这里需要异步包装
-                    setattr(DynamicCrawlSpider, callback_name, rule.callback)
+                cb = rule.callback  # 保留 bound method 引用
+                cb_name = cb.__name__
+                # 创建闭包包装，避免 setattr 问题
+                def make_wrapper(callback):
+                    async def wrapper(self_inner, response: Response):
+                        async for result in callback(response):
+                            yield result
+                    wrapper.__name__ = callback.__name__
+                    return wrapper
+                setattr(DynamicCrawlSpider, cb_name, make_wrapper(cb))
 
         return DynamicCrawlSpider
 
@@ -104,8 +144,6 @@ class RuleSpider(BaseSpider):
 
 class SitemapRuleSpider(BaseSpider):
     """Sitemap 驱动爬虫（包装 Scrapling SitemapSpider）
-
-    从 sitemap.xml 提取 URL 并按规则分发。
 
     示例：
         class ProductSitemap(SitemapRuleSpider):
@@ -131,9 +169,7 @@ class SitemapRuleSpider(BaseSpider):
     async def run(self) -> AsyncGenerator[dict, None]:
         scrapling_spider_cls = self._create_scrapling_spider()
         scrapling_spider = scrapling_spider_cls(crawldir=str(self._get_crawldir()))
-
         result = await asyncio.to_thread(scrapling_spider.start)
-
         if hasattr(result, 'items'):
             for item in result.items:
                 if self.should_stop:
@@ -141,10 +177,23 @@ class SitemapRuleSpider(BaseSpider):
                 yield item
 
     def _create_scrapling_spider(self):
-        from scrapling.spiders import SitemapSpider, CrawlRule, LinkExtractor, Response
+        from scrapling.spiders import SitemapSpider, Response
+        from scrapling.fetchers import FetcherSession, AsyncStealthySession, ProxyRotator
 
-        rules_list = self.rules()
         base_self = self
+        rules_list = self.rules()
+        session_kwargs = _build_session_kwargs(self)
+        stealth_kwargs = _build_stealth_kwargs(self)
+
+        if self.proxies:
+            rotator = ProxyRotator(self.proxies) if len(self.proxies) > 1 else None
+            if rotator:
+                if self.use_stealth:
+                    stealth_kwargs["proxy_rotator"] = rotator
+                else:
+                    session_kwargs["proxy_rotator"] = rotator
+            elif self.proxies:
+                session_kwargs["proxy"] = self.proxies[0]
 
         class DynamicSitemapSpider(SitemapSpider):
             name = base_self.name
@@ -155,17 +204,28 @@ class SitemapRuleSpider(BaseSpider):
             robots_txt_obey = base_self.robots_txt_obey
             development_mode = base_self.development_mode
 
+            def configure_sessions(self_inner, manager):
+                if base_self.use_stealth:
+                    manager.add("default", AsyncStealthySession(**stealth_kwargs))
+                else:
+                    manager.add("default", FetcherSession(**session_kwargs))
+
             def rules(self_inner):
                 return rules_list
 
         if self.sitemap_follow:
             DynamicSitemapSpider.sitemap_follow = self.sitemap_follow
 
-        # 绑定用户回调
         for rule in rules_list:
             if rule.callback and callable(rule.callback):
-                callback_name = rule.callback.__name__
-                setattr(DynamicSitemapSpider, callback_name, rule.callback)
+                cb = rule.callback
+                def make_wrapper(callback):
+                    async def wrapper(self_inner, response: Response):
+                        async for result in callback(response):
+                            yield result
+                    wrapper.__name__ = callback.__name__
+                    return wrapper
+                setattr(DynamicSitemapSpider, cb.__name__, make_wrapper(cb))
 
         return DynamicSitemapSpider
 
