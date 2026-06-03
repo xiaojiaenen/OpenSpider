@@ -65,12 +65,14 @@ class Engine:
         from openspider.storage.database import close_db
         await close_db()
 
-    async def start_spider(self, name: str, params: dict | None = None) -> TaskModel:
+    async def start_spider(self, name: str, params: dict | None = None,
+                          user_id: str | None = None) -> TaskModel:
         """启动爬虫
 
         Args:
             name: 爬虫名称
             params: 运行时参数（通过 API/CLI 传入）
+            user_id: 用户标识（用于数据隔离）
 
         Raises:
             ValueError: 爬虫不存在或已在运行
@@ -84,7 +86,12 @@ class Engine:
 
         # 创建任务记录
         async with async_session() as session:
-            task = TaskModel(spider_name=name, status=TaskStatus.RUNNING, params=params or {})
+            task = TaskModel(
+                spider_name=name,
+                status=TaskStatus.RUNNING,
+                params=params or {},
+                owner_user_id=user_id,
+            )
             session.add(task)
             await session.commit()
             await session.refresh(task)

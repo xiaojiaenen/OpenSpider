@@ -16,6 +16,7 @@ class SpiderInfo(BaseModel):
     schedule: str | None = None
     status: str = "idle"
     use_stealth: bool = False
+    owner_user_id: str | None = None
     is_running: bool = False
     items_scraped: int = 0
     requests_made: int = 0

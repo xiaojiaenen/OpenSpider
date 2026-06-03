@@ -36,6 +36,7 @@ class TaskModel(Base):
     errors_count: Mapped[int] = mapped_column(Integer, default=0)
     retry_count: Mapped[int] = mapped_column(Integer, default=0)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    owner_user_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
     params: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     crawldir: Mapped[str | None] = mapped_column(String(512), nullable=True)
     executor_node: Mapped[str | None] = mapped_column(String(128), nullable=True)

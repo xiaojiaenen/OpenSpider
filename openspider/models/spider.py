@@ -31,6 +31,7 @@ class SpiderModel(Base):
     max_retries: Mapped[int] = mapped_column(Integer, default=3)
     retry_delay: Mapped[int] = mapped_column(Integer, default=60)
     config: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    owner_user_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
     status: Mapped[SpiderStatus] = mapped_column(
         Enum(SpiderStatus), default=SpiderStatus.IDLE, nullable=False
     )
