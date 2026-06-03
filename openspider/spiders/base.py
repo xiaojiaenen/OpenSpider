@@ -165,18 +165,25 @@ class BaseSpider:
         return await self.get(url, **kwargs)
 
     async def get(self, url: str, **kwargs) -> Response:
-        """HTTP GET 请求"""
+        """HTTP GET 请求（兼容同步和异步 session）"""
         if self._session is None:
             raise RuntimeError("session 未初始化，爬虫必须通过 Runner 启动")
         merged = self._merge_request_kwargs(kwargs)
-        return await self._session.get(url, **merged)
+        result = self._session.get(url, **merged)
+        # FetcherSession.get() 返回同步结果，AsyncFetcher.get() 返回协程
+        if hasattr(result, '__await__'):
+            return await result
+        return result
 
     async def post(self, url: str, **kwargs) -> Response:
-        """HTTP POST 请求"""
+        """HTTP POST 请求（兼容同步和异步 session）"""
         if self._session is None:
             raise RuntimeError("session 未初始化，爬虫必须通过 Runner 启动")
         merged = self._merge_request_kwargs(kwargs)
-        return await self._session.post(url, **merged)
+        result = self._session.post(url, **merged)
+        if hasattr(result, '__await__'):
+            return await result
+        return result
 
     # ============================================================
     #  并发请求

@@ -91,8 +91,15 @@ class SpiderRunner:
             spider._stop_event = self._stop_event
             await spider.on_start()
 
-            # 统一走 Scrapling Spider
-            await self._run_with_scrapling(spider, pipeline)
+            # 判断模式
+            _has_custom_parse = type(spider).parse is not BaseSpider.parse
+
+            if _has_custom_parse:
+                # 高级模式：走 Scrapling Spider（并发/去重/代理全复用）
+                await self._run_with_scrapling(spider, pipeline)
+            else:
+                # 简单模式：直接跑 run()，用 FetcherSession
+                await self._run_simple(spider, pipeline)
 
             await spider.on_complete()
             await pipeline.flush()
@@ -126,6 +133,35 @@ class SpiderRunner:
         finally:
             await pipeline.close()
             logger.info(f"爬虫结束: {spider.name} | 数据: {self.items_scraped} | 请求: {self.requests_made} | 错误: {self.errors_count}")
+
+    async def _run_simple(self, spider: BaseSpider, pipeline=None) -> None:
+        """简单模式：直接跑 run()，用 FetcherSession"""
+        from scrapling.fetchers import FetcherSession
+
+        # FetcherSession 是 context manager，需要进入上下文才可用
+        session_ctx = FetcherSession(
+            impersonate=spider.impersonate,
+            http3=spider.http3,
+            stealthy_headers=spider.stealthy_headers,
+            verify=spider.ssl_verify,
+            timeout=spider.timeout,
+        )
+        session = session_ctx.__enter__()
+        spider._session = session
+
+        try:
+            async for item in spider.run():
+                if self._stop_event.is_set():
+                    break
+                if isinstance(item, dict):
+                    processed = await spider.on_item_scraped(item)
+                    if processed is not None:
+                        await self._save_item(processed)
+                        if pipeline:
+                            await pipeline.process(processed)
+                        self.items_scraped += 1
+        finally:
+            session_ctx.__exit__(None, None, None)
 
     async def _run_with_scrapling(self, spider: BaseSpider, pipeline=None) -> None:
         """统一通过 Scrapling Spider 执行
