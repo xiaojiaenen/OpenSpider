@@ -12,8 +12,8 @@ Your job is to help the user create spider code, upload it to the platform, mana
 
 ## Quick Reference
 
-**API base**: `http://localhost:8000` (configurable)
-**API docs**: `http://localhost:8000/docs`
+**API base**: `http://localhost:8088` (configurable)
+**API docs**: `http://localhost:8088/docs`
 
 ## Core Workflow
 
