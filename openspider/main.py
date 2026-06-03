@@ -38,12 +38,14 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# 注册路由
+# 注册路由和错误处理
 from openspider.api.routes import router, public_router, set_engine
+from openspider.api.error_handler import register_error_handlers
 
 set_engine(engine)
 app.include_router(public_router)  # 不需要认证的接口
 app.include_router(router)         # 需要认证的接口
+register_error_handlers(app)
 
 
 def serve(host: str = None, port: int = None):
