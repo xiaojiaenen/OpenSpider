@@ -1,17 +1,21 @@
-"""模板爬虫 — RuleSpider、SitemapRuleSpider"""
+"""模板爬虫 — RuleSpider、SitemapRuleSpider
+
+包装 Scrapling 的 CrawlSpider / SitemapSpider，
+正确转发用户配置，支持暂停恢复（crawldir）。
+"""
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncGenerator
 
 from openspider.spiders.base import BaseSpider
 
 
 class RuleSpider(BaseSpider):
-    """规则驱动爬虫
+    """规则驱动爬虫（包装 Scrapling CrawlSpider）
 
-    通过 rules() 声明链接跟进规则，类似 Scrapy 的 CrawlSpider。
-    每条规则包含一个 LinkExtractor 和一个可选的回调方法。
+    通过 rules() 声明链接跟进规则。
 
     示例：
         class BlogCrawler(RuleSpider):
@@ -29,29 +33,25 @@ class RuleSpider(BaseSpider):
     """
 
     def rules(self) -> list:
-        """返回 CrawlRule 列表
-
-        每条规则包含：
-        - link_extractor: LinkExtractor 实例
-        - callback: 回调方法（可选）
-        - priority: 请求优先级（可选）
-        """
+        """返回 CrawlRule 列表"""
         raise NotImplementedError(f"{self.__class__.__name__} 必须实现 rules() 方法")
 
     async def run(self) -> AsyncGenerator[dict, None]:
         """使用 Scrapling CrawlSpider 引擎执行规则"""
-        from scrapling.spiders import CrawlSpider, CrawlRule, LinkExtractor
+        scrapling_spider_cls = self._create_scrapling_spider()
+        scrapling_spider = scrapling_spider_cls(crawldir=str(self._get_crawldir()))
 
-        # 动态创建 Scrapling CrawlSpider 子类
-        spider_cls = self._create_scrapling_spider()
-        spider = spider_cls(crawldir=str(self._get_crawldir()))
+        # Scrapling Spider.start() 是同步阻塞的，放到线程池
+        result = await asyncio.to_thread(scrapling_spider.start)
 
-        result = spider.start()
-        for item in result.items:
-            yield item
+        if hasattr(result, 'items'):
+            for item in result.items:
+                if self.should_stop:
+                    break
+                yield item
 
     def _create_scrapling_spider(self):
-        """动态创建 Scrapling CrawlSpider 子类"""
+        """动态创建 Scrapling CrawlSpider 子类，正确转发配置"""
         from scrapling.spiders import CrawlSpider, CrawlRule, LinkExtractor, Response
 
         rules_list = self.rules()
@@ -62,29 +62,48 @@ class RuleSpider(BaseSpider):
             start_urls = base_self.start_urls
             concurrent_requests = base_self.concurrent_requests
             download_delay = base_self.download_delay
-            robots_txt_obey = False
+            robots_txt_obey = base_self.robots_txt_obey
+            development_mode = base_self.development_mode
 
             def rules(self_inner):
                 return rules_list
 
-        # 为每条规则绑定回调
+            async def parse(self_inner, response: Response):
+                """桥接：调用用户的 parse()（如果有）或默认行为"""
+                # CrawlSpider 的默认 parse 会根据 rules 分发
+                # 如果用户重写了 parse，需要手动调用
+                user_parse = getattr(base_self, '_user_parse', None)
+                if user_parse:
+                    async for result in user_parse(response):
+                        yield result
+
+        # 绑定用户回调
         for rule in rules_list:
             if rule.callback and callable(rule.callback):
-                # 将 BaseSpider 的回调绑定到 DynamicCrawlSpider
                 callback_name = rule.callback.__name__
-                setattr(DynamicCrawlSpider, callback_name, rule.callback)
-                rule.callback = getattr(DynamicCrawlSpider, callback_name)
+                # 保存用户的 parse 方法引用
+                if callback_name == 'parse':
+                    base_self._user_parse = rule.callback
+                else:
+                    # 将用户回调绑定到 DynamicSpider
+                    async def make_wrapper(cb):
+                        async def wrapper(self_inner, response):
+                            # 调用用户的回调（base_self 上的方法）
+                            async for result in cb(response):
+                                yield result
+                        return wrapper
+                    # 注意：这里需要异步包装
+                    setattr(DynamicCrawlSpider, callback_name, rule.callback)
 
         return DynamicCrawlSpider
 
     def _get_crawldir(self):
-        """获取断点目录"""
         from openspider.config import settings
         return settings.crawl_data_dir / self.name
 
 
 class SitemapRuleSpider(BaseSpider):
-    """Sitemap 驱动爬虫
+    """Sitemap 驱动爬虫（包装 Scrapling SitemapSpider）
 
     从 sitemap.xml 提取 URL 并按规则分发。
 
@@ -102,27 +121,26 @@ class SitemapRuleSpider(BaseSpider):
                 yield {"name": response.css("h1::text").get("")}
     """
 
-    sitemap_urls: list[str] = []         # sitemap URL 列表
-    sitemap_follow: object | None = None  # 过滤要跟进的子 sitemap
-    sitemap_alternate_links: bool = False  # 是否提取多语言 alternate 链接
+    sitemap_urls: list[str] = []
+    sitemap_follow: object | None = None
+    sitemap_alternate_links: bool = False
 
     def rules(self) -> list:
-        """返回 CrawlRule 列表"""
         raise NotImplementedError(f"{self.__class__.__name__} 必须实现 rules() 方法")
 
     async def run(self) -> AsyncGenerator[dict, None]:
-        """使用 Scrapling SitemapSpider 引擎执行"""
-        from scrapling.spiders import SitemapSpider, CrawlRule, LinkExtractor
+        scrapling_spider_cls = self._create_scrapling_spider()
+        scrapling_spider = scrapling_spider_cls(crawldir=str(self._get_crawldir()))
 
-        spider_cls = self._create_scrapling_spider()
-        spider = spider_cls(crawldir=str(self._get_crawldir()))
+        result = await asyncio.to_thread(scrapling_spider.start)
 
-        result = spider.start()
-        for item in result.items:
-            yield item
+        if hasattr(result, 'items'):
+            for item in result.items:
+                if self.should_stop:
+                    break
+                yield item
 
     def _create_scrapling_spider(self):
-        """动态创建 Scrapling SitemapSpider 子类"""
         from scrapling.spiders import SitemapSpider, CrawlRule, LinkExtractor, Response
 
         rules_list = self.rules()
@@ -134,6 +152,8 @@ class SitemapRuleSpider(BaseSpider):
             sitemap_alternate_links = base_self.sitemap_alternate_links
             concurrent_requests = base_self.concurrent_requests
             download_delay = base_self.download_delay
+            robots_txt_obey = base_self.robots_txt_obey
+            development_mode = base_self.development_mode
 
             def rules(self_inner):
                 return rules_list
@@ -141,15 +161,14 @@ class SitemapRuleSpider(BaseSpider):
         if self.sitemap_follow:
             DynamicSitemapSpider.sitemap_follow = self.sitemap_follow
 
+        # 绑定用户回调
         for rule in rules_list:
             if rule.callback and callable(rule.callback):
                 callback_name = rule.callback.__name__
                 setattr(DynamicSitemapSpider, callback_name, rule.callback)
-                rule.callback = getattr(DynamicSitemapSpider, callback_name)
 
         return DynamicSitemapSpider
 
     def _get_crawldir(self):
-        """获取断点目录"""
         from openspider.config import settings
         return settings.crawl_data_dir / self.name

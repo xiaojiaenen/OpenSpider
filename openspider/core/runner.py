@@ -1,9 +1,8 @@
-"""爬虫执行器 — 管理单个爬虫的执行生命周期"""
+"""爬虫执行器 — 委托 Scrapling Spider 处理爬取调度，平台管理生命周期"""
 
 from __future__ import annotations
 
 import asyncio
-import traceback
 from datetime import datetime
 
 from loguru import logger
@@ -12,17 +11,17 @@ from openspider.core.recovery import RecoveryManager
 from openspider.models.log import LogModel, LogLevel
 from openspider.models.spider import SpiderStatus
 from openspider.models.task import TaskStatus
-from openspider.spiders.base import BaseSpider  # 用于检测 parse() 是否被重写
+from openspider.spiders.base import BaseSpider
 
 
 class SpiderRunner:
     """爬虫执行器
 
     职责：
-    - 创建 Scrapling session 并注入爬虫实例
-    - 执行爬虫的 run() 方法，收集 yield 的数据项
-    - 管理停止信号和优雅退出
-    - 更新任务状态和统计数据
+    - 创建 Scrapling Spider 子类（运行时动态生成），复用其并发/去重/代理轮换
+    - 管理爬虫生命周期（启动、停止、暂停恢复）
+    - 统计数据和日志写入 MySQL
+    - 失败重试与指数退避
     """
 
     def __init__(self, spider_instance: BaseSpider, task_id: int, db_session_factory):
@@ -31,7 +30,7 @@ class SpiderRunner:
         self.db_session_factory = db_session_factory
         self._stop_event = asyncio.Event()
         self._task: asyncio.Task | None = None
-        self._session = None
+        self._scrapling_result = None
 
         # 统计
         self.items_scraped = 0
@@ -39,31 +38,14 @@ class SpiderRunner:
         self.errors_count = 0
         self.retry_count = 0
 
-    async def _log(self, level: LogLevel, message: str) -> None:
-        """写日志到数据库"""
-        try:
-            async with self.db_session_factory() as session:
-                log_entry = LogModel(
-                    spider_name=self.spider.name,
-                    task_id=self.task_id,
-                    level=level,
-                    message=message,
-                )
-                session.add(log_entry)
-                await session.commit()
-        except Exception:
-            pass  # 日志写入失败不应影响爬虫运行
-
     @property
     def is_running(self) -> bool:
         return self._task is not None and not self._task.done()
 
     async def start(self) -> None:
-        """启动爬虫执行"""
         self._task = asyncio.create_task(self._run())
 
     async def stop(self, timeout: float = 30.0) -> None:
-        """发送停止信号，等待爬虫优雅退出"""
         logger.info(f"发送停止信号: {self.spider.name}")
         self._stop_event.set()
         self.spider._stop_event = self._stop_event
@@ -79,42 +61,38 @@ class SpiderRunner:
                 except asyncio.CancelledError:
                     pass
 
+    async def _log(self, level: LogLevel, message: str) -> None:
+        try:
+            async with self.db_session_factory() as session:
+                log_entry = LogModel(
+                    spider_name=self.spider.name,
+                    task_id=self.task_id,
+                    level=level,
+                    message=message,
+                )
+                session.add(log_entry)
+                await session.commit()
+        except Exception:
+            pass
+
     async def _run(self) -> None:
-        """执行爬虫的核心逻辑"""
         spider = self.spider
         logger.info(f"爬虫启动: {spider.name}")
         await self._log(LogLevel.INFO, f"爬虫启动: {spider.name}")
 
         try:
-            # 注入停止信号
             spider._stop_event = self._stop_event
 
-            # 创建 Scrapling session（使用 async context manager）
-            self._session_ctx = self._create_session_context()
-            self._session = await self._session_ctx.__aenter__()
-            spider._session = self._session
-
-            # 调用 on_start 钩子
-            await spider.on_start()
-
-            # 判断爬虫模式：是否重写了 parse() 方法
+            # 判断模式：是否重写了 parse()
             _has_custom_parse = type(spider).parse is not BaseSpider.parse
 
             if _has_custom_parse:
-                # 高级模式：parse(response) 回调模式
-                # 对每个 start_urls 调用 parse，收集 Request 和数据项
-                await self._run_callback_mode(spider)
+                # 高级模式：创建 Scrapling Spider 子类，委托其调度引擎
+                await self._run_with_scrapling(spider)
             else:
                 # 简单模式：run() 异步生成器
-                async for item in spider.run():
-                    if self._stop_event.is_set():
-                        break
-                    processed = await spider.on_item_scraped(item)
-                    if processed is not None:
-                        await self._save_item(processed)
-                        self.items_scraped += 1
+                await self._run_simple(spider)
 
-            # 调用 on_complete 钩子
             await spider.on_complete()
             await self._log(LogLevel.INFO, f"爬虫完成: {spider.name}, 数据: {self.items_scraped}")
             await self._update_task_status(TaskStatus.COMPLETED)
@@ -130,28 +108,23 @@ class SpiderRunner:
             await self._log(LogLevel.ERROR, f"爬虫异常: {spider.name}: {e}")
             await spider.on_error(e)
 
-            # 重试逻辑
             if self.retry_count < spider.max_retries:
                 self.retry_count += 1
                 backoff = RecoveryManager.calculate_backoff(
                     self.retry_count, spider.retry_delay
                 )
-                logger.info(
-                    f"爬虫 {spider.name} 将在 {backoff}s 后重试 "
-                    f"({self.retry_count}/{spider.max_retries})"
-                )
+                logger.info(f"爬虫 {spider.name} 将在 {backoff}s 后重试 ({self.retry_count}/{spider.max_retries})")
                 await self._log(LogLevel.WARNING, f"将在 {backoff}s 后重试 ({self.retry_count}/{spider.max_retries})")
                 await self._update_task_status(TaskStatus.RUNNING, str(e))
                 await asyncio.sleep(backoff)
                 if not self._stop_event.is_set():
-                    await self._run()  # 递归重试
+                    await self._run()
                 return
 
             await self._log(LogLevel.ERROR, f"爬虫失败: {spider.name}, 已达最大重试次数")
             await self._update_task_status(TaskStatus.FAILED, str(e))
 
         finally:
-            await self._close_session()
             logger.info(
                 f"爬虫结束: {spider.name} | "
                 f"数据: {self.items_scraped} | "
@@ -159,63 +132,85 @@ class SpiderRunner:
                 f"错误: {self.errors_count}"
             )
 
-    async def _run_callback_mode(self, spider) -> None:
-        """高级模式：parse(response) 回调模式
+    async def _run_simple(self, spider: BaseSpider) -> None:
+        """简单模式：run() 异步生成器"""
+        # 创建 session
+        self._session = self._create_session()
+        spider._session = self._session
 
-        遍历 start_urls，对每个 URL 调用 parse()，
-        收集 yield 的 Request（递跟进）和 dict（数据项）。
+        await spider.on_start()
+
+        async for item in spider.run():
+            if self._stop_event.is_set():
+                break
+            processed = await spider.on_item_scraped(item)
+            if processed is not None:
+                await self._save_item(processed)
+                self.items_scraped += 1
+
+        await self._close_session()
+
+    async def _run_with_scrapling(self, spider: BaseSpider) -> None:
+        """高级模式：创建 Scrapling Spider 子类，委托其调度引擎
+
+        Scrapling 的 Spider 框架提供：
+        - 并发请求（concurrent_requests）
+        - 请求去重（内置 fingerprint）
+        - 代理轮换（ProxyRotator）
+        - 暂停恢复（crawldir）
+        - 请求间隔（download_delay）
+        - robots.txt 遵守
         """
-        from scrapling.spiders import Request as ScraplingRequest
+        scrapling_spider_cls = self._create_scrapling_spider(spider)
+        scrapling_spider = scrapling_spider_cls(crawldir=str(self._get_crawldir()))
 
-        visited = set()
-        queue = []  # (url, callback)
+        await spider.on_start()
 
-        # 初始化队列
-        for url in spider.start_urls:
-            queue.append((url, spider.parse))
+        # Scrapling Spider.start() 是同步阻塞的，放到线程池执行
+        result = await asyncio.to_thread(scrapling_spider.start)
+        self._scrapling_result = result
 
-        while queue and not self._stop_event.is_set():
-            url, callback = queue.pop(0)
-            if url in visited:
-                continue
-            visited.add(url)
+        # 收集结果
+        if hasattr(result, 'items'):
+            for item_data in result.items:
+                if self._stop_event.is_set():
+                    break
+                if isinstance(item_data, dict):
+                    processed = await spider.on_item_scraped(item_data)
+                    if processed is not None:
+                        await self._save_item(processed)
+                        self.items_scraped += 1
 
-            try:
-                response = await spider.get(url)
-                self.requests_made += 1
+        self.requests_made = getattr(result, 'total_requests', 0) or self.requests_made
 
-                async for result in callback(response):
-                    if self._stop_event.is_set():
-                        break
+    def _create_scrapling_spider(self, spider: BaseSpider):
+        """动态创建 Scrapling Spider 子类，转发用户配置"""
+        from scrapling.spiders import Spider, Request, Response
 
-                    if isinstance(result, dict):
-                        # 数据项
-                        processed = await spider.on_item_scraped(result)
-                        if processed is not None:
-                            await self._save_item(processed)
-                            self.items_scraped += 1
+        base_spider = spider
 
-                    elif isinstance(result, ScraplingRequest):
-                        # Request 对象，加入队列
-                        req_url = result.url
-                        req_callback = result.callback or spider.parse
-                        if req_url not in visited:
-                            queue.append((req_url, req_callback))
+        class DynamicSpider(Spider):
+            name = base_spider.name
+            start_urls = base_spider.start_urls
+            concurrent_requests = base_spider.concurrent_requests
+            download_delay = base_spider.download_delay
+            robots_txt_obey = base_spider.robots_txt_obey
+            development_mode = base_spider.development_mode
 
-            except Exception as e:
-                self.errors_count += 1
-                await self._log(LogLevel.ERROR, f"请求失败: {url}: {e}")
-                await spider.on_error(e)
+            async def parse(self_inner, response: Response):
+                """桥接：调用用户的 parse()，收集 yield 的结果"""
+                async for result in base_spider.parse(response):
+                    yield result
 
-    def _create_session_context(self):
-        """根据爬虫配置创建 Scrapling session 的 async context manager"""
-        from scrapling.fetchers import FetcherSession, AsyncStealthySession, AsyncDynamicSession
-        from contextlib import asynccontextmanager
+        return DynamicSpider
+
+    def _create_session(self):
+        """简单模式下创建 Scrapling session"""
+        from scrapling.fetchers import FetcherSession, AsyncStealthySession
 
         spider = self.spider
-
         if spider.use_stealth:
-            session = AsyncStealthySession(
+            return AsyncStealthySession(
                 headless=True,
                 solve_cloudflare=spider.solve_cloudflare,
                 block_webrtc=spider.block_webrtc,
@@ -229,7 +224,7 @@ class SpiderRunner:
                 dns_over_https=spider.dns_over_https,
                 locale=spider.locale,
                 timezone_id=spider.timezone_id,
-                timeout=spider.timeout * 1000,  # 毫秒
+                timeout=spider.timeout * 1000,
                 wait=spider.wait,
                 disable_resources=spider.disable_resources,
                 network_idle=spider.network_idle,
@@ -240,46 +235,47 @@ class SpiderRunner:
                 capture_xhr=spider.capture_xhr,
             )
         else:
-            session = FetcherSession(
+            return FetcherSession(
                 impersonate=spider.impersonate,
                 http3=spider.http3,
                 stealthy_headers=spider.stealthy_headers,
                 verify=spider.ssl_verify,
                 timeout=spider.timeout,
             )
-        return session
 
     async def _close_session(self) -> None:
-        """关闭 Scrapling session"""
-        if hasattr(self, '_session_ctx') and self._session_ctx is not None:
+        if self._session is not None:
             try:
-                await self._session_ctx.__aexit__(None, None, None)
+                await self._session.__aexit__(None, None, None)
             except Exception:
                 pass
-            self._session_ctx = None
-        self._session = None
+            self._session = None
+
+    def _get_crawldir(self):
+        from openspider.config import settings
+        return settings.crawl_data_dir / self.spider.name
 
     async def _save_item(self, item: dict) -> None:
-        """保存数据项到数据库"""
         from openspider.models.item import ItemModel
-
-        async with self.db_session_factory() as session:
-            db_item = ItemModel(
-                spider_name=self.spider.name,
-                task_id=self.task_id,
-                data=item,
-                url=item.get("url", ""),
-            )
-            session.add(db_item)
-            await session.commit()
+        try:
+            async with self.db_session_factory() as session:
+                db_item = ItemModel(
+                    spider_name=self.spider.name,
+                    task_id=self.task_id,
+                    data=item,
+                    url=item.get("url", ""),
+                )
+                session.add(db_item)
+                await session.commit()
+        except Exception as e:
+            logger.error(f"保存数据失败: {e}")
 
     async def _update_task_status(self, status: TaskStatus, error_message: str | None = None) -> None:
-        """更新任务状态"""
         from openspider.models.task import TaskModel
+        from openspider.models.spider import SpiderModel
+        from sqlalchemy import update
 
         async with self.db_session_factory() as session:
-            from sqlalchemy import select, update
-
             stmt = (
                 update(TaskModel)
                 .where(TaskModel.id == self.task_id)
@@ -295,7 +291,6 @@ class SpiderRunner:
             await session.execute(stmt)
             await session.commit()
 
-        # 同步更新 spiders 表状态
         spider_status_map = {
             TaskStatus.COMPLETED: SpiderStatus.IDLE,
             TaskStatus.FAILED: SpiderStatus.FAILED,
@@ -303,7 +298,6 @@ class SpiderRunner:
         }
         spider_status = spider_status_map.get(status)
         if spider_status:
-            from openspider.models.spider import SpiderModel
             async with self.db_session_factory() as session:
                 stmt = (
                     update(SpiderModel)

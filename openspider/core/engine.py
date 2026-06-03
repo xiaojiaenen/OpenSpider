@@ -126,8 +126,15 @@ class Engine:
         return True
 
     async def pause_spider(self, name: str) -> bool:
-        """暂停爬虫（同 stop，保留断点）"""
-        return await self.stop_spider(name)
+        """暂停爬虫（停止执行，crawldir 保留断点，可恢复）"""
+        runner = self._runners.get(name)
+        if runner is None or not runner.is_running:
+            return False
+
+        # 发送停止信号，Scrapling 会将未完成的请求保存到 crawldir
+        await runner.stop()
+        logger.info(f"爬虫已暂停: {name}（断点已保存）")
+        return True
 
     def get_spider_status(self, name: str) -> dict | None:
         """获取爬虫运行状态"""
