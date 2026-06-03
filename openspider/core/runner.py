@@ -9,6 +9,7 @@ from datetime import datetime
 from loguru import logger
 
 from openspider.core.recovery import RecoveryManager
+from openspider.models.log import LogModel, LogLevel
 from openspider.models.spider import SpiderStatus
 from openspider.models.task import TaskStatus
 from openspider.spiders.base import BaseSpider
@@ -37,6 +38,21 @@ class SpiderRunner:
         self.requests_made = 0
         self.errors_count = 0
         self.retry_count = 0
+
+    async def _log(self, level: LogLevel, message: str) -> None:
+        """写日志到数据库"""
+        try:
+            async with self.db_session_factory() as session:
+                log_entry = LogModel(
+                    spider_name=self.spider.name,
+                    task_id=self.task_id,
+                    level=level,
+                    message=message,
+                )
+                session.add(log_entry)
+                await session.commit()
+        except Exception:
+            pass  # 日志写入失败不应影响爬虫运行
 
     @property
     def is_running(self) -> bool:
@@ -67,6 +83,7 @@ class SpiderRunner:
         """执行爬虫的核心逻辑"""
         spider = self.spider
         logger.info(f"爬虫启动: {spider.name}")
+        await self._log(LogLevel.INFO, f"爬虫启动: {spider.name}")
 
         try:
             # 注入停止信号
@@ -93,15 +110,18 @@ class SpiderRunner:
 
             # 调用 on_complete 钩子
             await spider.on_complete()
+            await self._log(LogLevel.INFO, f"爬虫完成: {spider.name}, 数据: {self.items_scraped}")
             await self._update_task_status(TaskStatus.COMPLETED)
 
         except asyncio.CancelledError:
             logger.info(f"爬虫被取消: {spider.name}")
+            await self._log(LogLevel.WARNING, f"爬虫被取消: {spider.name}")
             await self._update_task_status(TaskStatus.PAUSED)
 
         except Exception as e:
             logger.error(f"爬虫异常: {spider.name}: {e}")
             self.errors_count += 1
+            await self._log(LogLevel.ERROR, f"爬虫异常: {spider.name}: {e}")
             await spider.on_error(e)
 
             # 重试逻辑
@@ -114,12 +134,14 @@ class SpiderRunner:
                     f"爬虫 {spider.name} 将在 {backoff}s 后重试 "
                     f"({self.retry_count}/{spider.max_retries})"
                 )
+                await self._log(LogLevel.WARNING, f"将在 {backoff}s 后重试 ({self.retry_count}/{spider.max_retries})")
                 await self._update_task_status(TaskStatus.RUNNING, str(e))
                 await asyncio.sleep(backoff)
                 if not self._stop_event.is_set():
                     await self._run()  # 递归重试
                 return
 
+            await self._log(LogLevel.ERROR, f"爬虫失败: {spider.name}, 已达最大重试次数")
             await self._update_task_status(TaskStatus.FAILED, str(e))
 
         finally:
