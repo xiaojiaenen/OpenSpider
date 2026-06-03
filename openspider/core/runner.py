@@ -12,7 +12,7 @@ from openspider.core.recovery import RecoveryManager
 from openspider.models.log import LogModel, LogLevel
 from openspider.models.spider import SpiderStatus
 from openspider.models.task import TaskStatus
-from openspider.spiders.base import BaseSpider
+from openspider.spiders.base import BaseSpider  # 用于检测 parse() 是否被重写
 
 
 class SpiderRunner:
@@ -97,16 +97,22 @@ class SpiderRunner:
             # 调用 on_start 钩子
             await spider.on_start()
 
-            # 执行 run()，收集数据项
-            async for item in spider.run():
-                if self._stop_event.is_set():
-                    break
+            # 判断爬虫模式：是否重写了 parse() 方法
+            _has_custom_parse = type(spider).parse is not BaseSpider.parse
 
-                # 后处理
-                processed = await spider.on_item_scraped(item)
-                if processed is not None:
-                    await self._save_item(processed)
-                    self.items_scraped += 1
+            if _has_custom_parse:
+                # 高级模式：parse(response) 回调模式
+                # 对每个 start_urls 调用 parse，收集 Request 和数据项
+                await self._run_callback_mode(spider)
+            else:
+                # 简单模式：run() 异步生成器
+                async for item in spider.run():
+                    if self._stop_event.is_set():
+                        break
+                    processed = await spider.on_item_scraped(item)
+                    if processed is not None:
+                        await self._save_item(processed)
+                        self.items_scraped += 1
 
             # 调用 on_complete 钩子
             await spider.on_complete()
@@ -152,6 +158,54 @@ class SpiderRunner:
                 f"请求: {self.requests_made} | "
                 f"错误: {self.errors_count}"
             )
+
+    async def _run_callback_mode(self, spider) -> None:
+        """高级模式：parse(response) 回调模式
+
+        遍历 start_urls，对每个 URL 调用 parse()，
+        收集 yield 的 Request（递跟进）和 dict（数据项）。
+        """
+        from scrapling.spiders import Request as ScraplingRequest
+
+        visited = set()
+        queue = []  # (url, callback)
+
+        # 初始化队列
+        for url in spider.start_urls:
+            queue.append((url, spider.parse))
+
+        while queue and not self._stop_event.is_set():
+            url, callback = queue.pop(0)
+            if url in visited:
+                continue
+            visited.add(url)
+
+            try:
+                response = await spider.get(url)
+                self.requests_made += 1
+
+                async for result in callback(response):
+                    if self._stop_event.is_set():
+                        break
+
+                    if isinstance(result, dict):
+                        # 数据项
+                        processed = await spider.on_item_scraped(result)
+                        if processed is not None:
+                            await self._save_item(processed)
+                            self.items_scraped += 1
+
+                    elif isinstance(result, ScraplingRequest):
+                        # Request 对象，加入队列
+                        req_url = result.url
+                        req_callback = result.callback or spider.parse
+                        if req_url not in visited:
+                            queue.append((req_url, req_callback))
+
+            except Exception as e:
+                self.errors_count += 1
+                await self._log(LogLevel.ERROR, f"请求失败: {url}: {e}")
+                await spider.on_error(e)
 
     def _create_session_context(self):
         """根据爬虫配置创建 Scrapling session 的 async context manager"""

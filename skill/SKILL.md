@@ -28,27 +28,55 @@ OpenSpider 是一个爬虫管理平台，管理多个爬虫的完整生命周期
 
 ## 编写爬虫代码
 
-所有爬虫继承 `BaseSpider` 并实现 `async def run(self)` 方法。
+所有爬虫继承 `BaseSpider`，支持两种编写模式：
+
+### 简单模式 — run() 异步生成器
+
+适合简单场景，直接请求 + yield 数据项：
 
 ```python
 from openspider.spiders.base import BaseSpider
 
 class MySpider(BaseSpider):
-    name = "my_spider"           # 必填：唯一标识
-    start_urls = ["https://..."] # 入口 URL
+    name = "my_spider"
+    start_urls = ["https://example.com"]
 
     async def run(self):
         page = await self.get(self.start_urls[0])
         for item in page.css(".article"):
-            if self.should_stop:  # 检查停止信号，优雅退出
+            if self.should_stop:
                 break
-            yield {
-                "title": item.css("h2::text").get(""),
-                "link": item.css("a::attr(href)").get(""),
-            }
+            yield {"title": item.css("h2::text").get("")}
 ```
 
-`run()` 是一个异步生成器，用 `yield` 输出爬取的数据项（字典）。用 `await self.get(url)` 或 `await self.post(url, data=...)` 抓取页面。
+### 高级模式 — parse(response) 回调模式
+
+适合复杂场景：多级页面跟进、列表→详情、自动翻页：
+
+```python
+class BlogSpider(BaseSpider):
+    name = "blog"
+    start_urls = ["https://example.com/posts"]
+
+    async def parse(self, response):
+        """列表页：提取链接 + 跟进分页"""
+        for link in response.css("a.post-link::attr(href)").getall():
+            yield self.follow(link, callback=self.parse_post)  # 跟进到详情页
+
+        next_page = response.css("a.next::attr(href)").get()
+        if next_page:
+            yield self.follow(next_page, callback=self.parse)  # 翻页
+
+    async def parse_post(self, response):
+        """详情页：提取数据"""
+        yield {
+            "title": response.css("h1::text").get(""),
+            "content": response.css("article").get(""),
+            "url": response.url,
+        }
+```
+
+两种模式自动识别：实现 `parse()` 走回调模式，否则走 `run()` 模式。
 
 ### 可用方法
 
@@ -56,6 +84,9 @@ class MySpider(BaseSpider):
 |------|------|
 | `await self.get(url, **kwargs)` | HTTP GET 请求，返回 Scrapling Response 对象 |
 | `await self.post(url, **kwargs)` | HTTP POST 请求，返回 Scrapling Response 对象 |
+| `self.follow(url, callback=)` | 创建跟进请求（高级模式用），自动处理相对 URL 和 Referer |
+| `self.request(url, callback=)` | 创建 Request 对象（高级模式用） |
+| `await self.concurrent_fetch(urls, max_concurrent=10)` | 并发抓取多个 URL |
 | `self.should_stop` | 返回 `True` 表示收到停止信号 |
 | `self.session` | 底层 Scrapling session，用于高级操作 |
 | `self.env(key, default=None)` | 读取环境变量（用于 API Key、密码等敏感参数） |
