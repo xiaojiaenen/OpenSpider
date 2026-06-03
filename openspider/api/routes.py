@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, UploadFile, File, Query
+from fastapi import APIRouter, HTTPException, UploadFile, File, Query, Depends
+from openspider.api.auth import verify_api_key
 from sqlalchemy import select, func, update
 
 from openspider import __version__
@@ -28,7 +29,10 @@ from openspider.models.item import ItemModel
 from openspider.models.log import LogModel
 from openspider.storage.database import async_session
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(verify_api_key)])
+
+# 不需要认证的路由单独创建
+public_router = APIRouter()
 
 # 全局引擎实例（由 main.py 注入）
 _engine = None
@@ -47,9 +51,9 @@ def get_engine():
     return _engine
 
 
-# === 健康检查 ===
+# === 健康检查（不需要认证） ===
 
-@router.get("/health", response_model=HealthResponse)
+@public_router.get("/health", response_model=HealthResponse)
 async def health_check():
     """健康检查"""
     engine = get_engine()

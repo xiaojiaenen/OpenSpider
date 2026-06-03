@@ -28,6 +28,9 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     log_file: Path = Path("./logs/openspider.log")
 
+    # API 认证（留空则跳过认证，开发模式）
+    api_key: str = ""
+
     @property
     def database_url(self) -> str:
         """异步 MySQL 连接 URL"""

@@ -39,10 +39,11 @@ app = FastAPI(
 )
 
 # 注册路由
-from openspider.api.routes import router, set_engine
+from openspider.api.routes import router, public_router, set_engine
 
 set_engine(engine)
-app.include_router(router)
+app.include_router(public_router)  # 不需要认证的接口
+app.include_router(router)         # 需要认证的接口
 
 
 def serve(host: str = None, port: int = None):
