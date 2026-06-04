@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
 from fastapi import APIRouter, HTTPException, UploadFile, File, Query, Depends
 from openspider.api.auth import get_current_user
 from openspider.api.user_context import UserContext, get_ctx
@@ -19,16 +17,16 @@ from openspider.api.schemas import (
     SpiderActionResponse,
     SpiderUploadResponse,
     SpiderVisibilityRequest,
+    SpiderDataResponse,
+    SpiderFieldsResponse,
     TaskInfo,
     TaskListResponse,
-    ItemInfo,
-    ItemListResponse,
     LogInfo,
     LogListResponse,
 )
+from openspider.core.data_manager import SpiderDataManager
 from openspider.models.spider import SpiderModel, SpiderStatus
-from openspider.models.task import TaskModel, TaskStatus
-from openspider.models.item import ItemModel
+from openspider.models.task import TaskModel
 from openspider.models.log import LogModel
 from openspider.storage.database import async_session
 
@@ -439,88 +437,120 @@ async def get_task_logs(task_id: int, limit: int = Query(100, ge=1, le=500)):
     )
 
 
-# === 数据查询 ===
+# === 数据查询（按爬虫隔离） ===
 
-@router.get("/items", response_model=ItemListResponse)
-async def list_items(
-    spider: str | None = Query(None, description="按爬虫筛选"),
-    task_id: int | None = Query(None, description="按任务筛选"),
-    page: int = Query(1, ge=1),
-    page_size: int = Query(50, ge=1, le=200),
-    ctx: UserContext = Depends(get_ctx),
-):
-    """爬取数据查询（按用户隔离）"""
-    offset = (page - 1) * page_size
+async def _build_data_manager(spider_id: int) -> SpiderDataManager:
+    """异步构建 SpiderDataManager"""
+    engine = get_engine()
 
     async with async_session() as session:
-        query = select(ItemModel).order_by(ItemModel.crawled_at.desc())
-        count_query = select(func.count()).select_from(ItemModel)
+        result = await session.execute(
+            select(SpiderModel).where(SpiderModel.id == spider_id)
+        )
+        db_spider = result.scalar_one_or_none()
 
-        # 非管理员只能看自己的或公开爬虫的数据
-        if not ctx.is_admin and ctx.user_id:
-            visible_spiders = select(SpiderModel.name).where(
-                (SpiderModel.owner_user_id == ctx.user_id) |
-                (SpiderModel.is_public == True)
-            )
-            query = query.where(ItemModel.spider_name.in_(visible_spiders))
-            count_query = count_query.where(ItemModel.spider_name.in_(visible_spiders))
+    if db_spider is None:
+        raise HTTPException(status_code=404, detail=f"爬虫 id={spider_id} 不存在")
 
-        if spider:
-            query = query.where(ItemModel.spider_name == spider)
-            count_query = count_query.where(ItemModel.spider_name == spider)
-        if task_id:
-            query = query.where(ItemModel.task_id == task_id)
-            count_query = count_query.where(ItemModel.task_id == task_id)
+    # 从 engine.registry 获取爬虫类的 fields 定义
+    spider_cls = engine.registry.get(db_spider.name)
+    fields = getattr(spider_cls, "fields", []) if spider_cls else []
+    dedup_key = getattr(spider_cls, "dedup_key", None) if spider_cls else None
 
-        query = query.offset(offset).limit(page_size)
+    return SpiderDataManager(
+        db_session_factory=async_session,
+        spider_id=spider_id,
+        spider_name=db_spider.name,
+        fields=fields,
+        dedup_key=dedup_key,
+    )
 
-        result = await session.execute(query)
-        items = result.scalars().all()
-        total = (await session.execute(count_query)).scalar() or 0
 
-    return ItemListResponse(
-        items=[
-            ItemInfo(
-                id=i.id,
-                spider_name=i.spider_name,
-                task_id=i.task_id,
-                data=i.data,
-                url=i.url,
-                crawled_at=i.crawled_at,
-            )
-            for i in items
-        ],
-        total=total,
+@router.get("/spiders/{spider_id}/data", response_model=SpiderDataResponse)
+async def get_spider_data(
+    spider_id: int,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=200),
+    user_id: str | None = Query(None, description="按用户筛选（管理员可用）"),
+    ctx: UserContext = Depends(get_ctx),
+):
+    """查询爬虫数据（按爬虫隔离，每张表独立）"""
+    # 权限检查
+    async with async_session() as session:
+        result = await session.execute(
+            select(SpiderModel).where(SpiderModel.id == spider_id)
+        )
+        db_spider = result.scalar_one_or_none()
+
+    if db_spider is None:
+        raise HTTPException(status_code=404, detail=f"爬虫 id={spider_id} 不存在")
+
+    # 非管理员只能看自己的或公开爬虫的数据
+    if not ctx.is_admin and ctx.user_id:
+        is_owner = db_spider.owner_user_id == ctx.user_id
+        if not is_owner and not db_spider.is_public:
+            raise HTTPException(status_code=403, detail="无权查看该爬虫数据")
+
+    dm = await _build_data_manager(spider_id)
+
+    # 确保表存在
+    await dm.ensure_table()
+
+    # 非管理员只能查自己的数据
+    query_user_id = user_id if ctx.is_admin else ctx.user_id
+
+    result = await dm.query(
+        user_id=query_user_id,
         page=page,
         page_size=page_size,
     )
 
+    return SpiderDataResponse(
+        items=result["items"],
+        total=result["total"],
+        page=page,
+        page_size=page_size,
+        columns=dm.get_field_names(),
+    )
 
-@router.get("/export/{spider_name}")
-async def export_data(
-    spider_name: str,
+
+@router.get("/spiders/{spider_id}/export")
+async def export_spider_data(
+    spider_id: int,
     format: str = Query("json", description="导出格式: json/jsonl/csv"),
     limit: int = Query(10000, ge=1, le=100000),
+    user_id: str | None = Query(None, description="按用户筛选（管理员可用）"),
+    ctx: UserContext = Depends(get_ctx),
 ):
-    """导出爬取数据"""
+    """导出爬虫数据"""
+    # 权限检查
     async with async_session() as session:
-        query = (
-            select(ItemModel)
-            .where(ItemModel.spider_name == spider_name)
-            .order_by(ItemModel.crawled_at.desc())
-            .limit(limit)
+        result = await session.execute(
+            select(SpiderModel).where(SpiderModel.id == spider_id)
         )
-        result = await session.execute(query)
-        items = result.scalars().all()
+        db_spider = result.scalar_one_or_none()
+
+    if db_spider is None:
+        raise HTTPException(status_code=404, detail=f"爬虫 id={spider_id} 不存在")
+
+    if not ctx.is_admin and ctx.user_id:
+        is_owner = db_spider.owner_user_id == ctx.user_id
+        if not is_owner and not db_spider.is_public:
+            raise HTTPException(status_code=403, detail="无权导出该爬虫数据")
+
+    dm = await _build_data_manager(spider_id)
+    await dm.ensure_table()
+
+    query_user_id = user_id if ctx.is_admin else ctx.user_id
+    items = await dm.export(user_id=query_user_id, limit=limit)
 
     if format == "json":
         import json
-        data = [i.data for i in items]
-        return {"data": data, "count": len(data)}
+        return {"data": items, "count": len(items)}
 
     elif format == "jsonl":
         import json
-        lines = [json.dumps(i.data, ensure_ascii=False) for i in items]
+        lines = [json.dumps(item, ensure_ascii=False) for item in items]
         from fastapi.responses import PlainTextResponse
         return PlainTextResponse("\n".join(lines), media_type="application/x-ndjson")
 
@@ -531,20 +561,32 @@ async def export_data(
 
         output = io.StringIO()
         if items:
-            writer = csv.DictWriter(output, fieldnames=items[0].data.keys())
+            writer = csv.DictWriter(output, fieldnames=items[0].keys())
             writer.writeheader()
             for item in items:
-                writer.writerow(item.data)
+                writer.writerow(item)
 
         output.seek(0)
         return StreamingResponse(
             iter([output.getvalue()]),
             media_type="text/csv",
-            headers={"Content-Disposition": f"attachment; filename={spider_name}.csv"},
+            headers={"Content-Disposition": f"attachment; filename={db_spider.name}.csv"},
         )
 
     else:
         raise HTTPException(status_code=400, detail=f"不支持的格式: {format}")
+
+
+@router.get("/spiders/{spider_id}/fields", response_model=SpiderFieldsResponse)
+async def get_spider_fields(spider_id: int):
+    """获取爬虫的字段定义"""
+    dm = await _build_data_manager(spider_id)
+    return SpiderFieldsResponse(
+        spider_id=spider_id,
+        spider_name=dm.spider_name,
+        fields=dm.fields,
+        dedup_key=dm.dedup_key,
+    )
 
 
 # === 能力描述 ===
@@ -659,5 +701,4 @@ async def admin_stats(ctx: UserContext = Depends(get_ctx)):
     async with async_session() as session:
         spider_count = (await session.execute(select(func.count()).select_from(SpiderModel))).scalar()
         task_count = (await session.execute(select(func.count()).select_from(TaskModel))).scalar()
-        item_count = (await session.execute(select(func.count()).select_from(ItemModel))).scalar()
-    return {"spiders": spider_count, "tasks": task_count, "items": item_count}
+    return {"spiders": spider_count, "tasks": task_count}
