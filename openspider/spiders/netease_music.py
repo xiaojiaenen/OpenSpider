@@ -9,6 +9,15 @@ class NeteaseMusicSpider(BaseSpider):
     timeout = 30
     max_retries = 3
 
+    fields = [
+        {"name": "playlist_id", "type": "VARCHAR(128)"},
+        {"name": "playlist_name", "type": "VARCHAR(512)"},
+        {"name": "cover_url", "type": "VARCHAR(2048)"},
+        {"name": "track_count", "type": "INTEGER"},
+        {"name": "play_count", "type": "INTEGER"},
+        {"name": "tracks", "type": "TEXT"},
+    ]
+
     async def run(self):
         # Get daily recommended playlists
         api_url = "https://music.163.com/api/personalized/playlist?limit=10"

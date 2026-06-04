@@ -16,6 +16,19 @@ class HelloGitHubV2Spider(BaseSpider):
     primary_key = ["rid"]
     max_pages = 3
 
+    fields = [
+        {"name": "rid", "type": "VARCHAR(512)"},
+        {"name": "title", "type": "VARCHAR(512)"},
+        {"name": "title_en", "type": "VARCHAR(512)"},
+        {"name": "author", "type": "VARCHAR(512)"},
+        {"name": "full_name", "type": "VARCHAR(512)"},
+        {"name": "summary", "type": "TEXT"},
+        {"name": "summary_en", "type": "TEXT"},
+        {"name": "primary_lang", "type": "VARCHAR(128)"},
+        {"name": "stars", "type": "INTEGER"},
+        {"name": "publish_at", "type": "VARCHAR(128)"},
+    ]
+
     async def run(self):
         keywords = ["python", "javascript", "rust", "go", "java", "typescript", "c++", "swift"]
         for keyword in keywords:

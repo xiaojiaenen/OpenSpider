@@ -27,6 +27,14 @@ class MultiSessionSpider(BaseSpider):
     start_urls = ["https://quotes.toscrape.com/"]
     use_stealth = False  # 基础模式不使用 stealth，通过 sid 按需路由
 
+    fields = [
+        {"name": "text", "type": "TEXT"},
+        {"name": "author", "type": "VARCHAR(512)"},
+        {"name": "type", "type": "VARCHAR(64)"},
+        {"name": "url", "type": "VARCHAR(2048)"},
+        {"name": "title", "type": "VARCHAR(512)"},
+    ]
+
     # 需要走隐身浏览器的 URL 模式列表（子类可覆盖）
     stealth_url_patterns: list[str] = ["/protected", "/login", "/verify"]
 

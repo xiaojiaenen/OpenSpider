@@ -26,6 +26,16 @@ class XHRCaptureSpider(BaseSpider):
     use_stealth = True  # SPA 页面通常需要浏览器渲染
     network_idle = True  # 等待所有 XHR 完成
 
+    fields = [
+        {"name": "type", "type": "VARCHAR(64)"},
+        {"name": "text", "type": "TEXT"},
+        {"name": "author", "type": "VARCHAR(512)"},
+        {"name": "tags", "type": "TEXT"},
+        {"name": "url", "type": "VARCHAR(2048)"},
+        {"name": "status", "type": "INTEGER"},
+        {"name": "data", "type": "TEXT"},
+    ]
+
     # 要拦截的 API URL 正则模式
     capture_xhr = r"https://quotes\.toscrape\.com/.*"
 

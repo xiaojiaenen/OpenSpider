@@ -66,6 +66,12 @@ class InfiniteScrollSpider(BaseSpider):
     network_idle = True
     wait = 2000  # 额外等待 2 秒
 
+    fields = [
+        {"name": "text", "type": "TEXT"},
+        {"name": "author", "type": "VARCHAR(512)"},
+        {"name": "tags", "type": "TEXT"},
+    ]
+
     # 设置页面交互钩子
     page_action = scroll_to_bottom
 
@@ -94,6 +100,11 @@ class PopupHandlingSpider(BaseSpider):
     description = "弹窗处理示例 — page_setup 关闭弹窗"
     start_urls = ["https://example.com"]
     use_stealth = True
+
+    fields = [
+        {"name": "url", "type": "VARCHAR(2048)"},
+        {"name": "title", "type": "VARCHAR(512)"},
+    ]
 
     # 先关闭弹窗
     page_setup = close_popups

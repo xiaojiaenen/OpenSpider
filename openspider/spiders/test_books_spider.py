@@ -9,6 +9,13 @@ class BooksSpider(BaseSpider):
     concurrent_requests = 2
     download_delay = 0.3
 
+    fields = [
+        {"name": "title", "type": "VARCHAR(512)"},
+        {"name": "price", "type": "VARCHAR(64)"},
+        {"name": "availability", "type": "VARCHAR(128)"},
+        {"name": "rating", "type": "VARCHAR(64)"},
+    ]
+
     async def run(self):
         page = await self.get(self.start_urls[0])
         for book in page.css("article.product_pod"):

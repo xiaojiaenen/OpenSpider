@@ -11,6 +11,16 @@ class BaiduSearchSpider(BaseSpider):
     concurrent_requests = 2
     timeout = 30
 
+    fields = [
+        {"name": "keyword", "type": "VARCHAR(512)"},
+        {"name": "rank", "type": "INTEGER"},
+        {"name": "title", "type": "VARCHAR(512)"},
+        {"name": "link", "type": "VARCHAR(2048)"},
+        {"name": "abstract", "type": "TEXT"},
+        {"name": "page_title", "type": "VARCHAR(512)"},
+        {"name": "page_content", "type": "TEXT"},
+    ]
+
     async def run(self):
         for keyword in self.search_keywords:
             if self.should_stop:
