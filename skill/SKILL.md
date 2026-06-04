@@ -75,6 +75,8 @@ class BlogSpider(BaseSpider):
 | `await self.post(url, **kwargs)` | HTTP POST，返回 Scrapling Response |
 | `self.follow(url, callback=)` | 创建跟进请求，自动解析相对 URL + Referer（委托 Scrapling response.follow） |
 | `self.request(url, callback=)` | 创建 Scrapling Request 对象 |
+| `self.select(response, selector, css=True)` | 统一选择器，自动应用 adaptive 自适应配置 |
+| `self.export_items(items, format, path)` | 数据导出工具（json/csv/parquet/pandas） |
 | `self.should_stop` | 检查停止信号 |
 | `self.session` | Scrapling session 实例 |
 | `self.env(key, default=None)` | 读取环境变量（敏感参数） |
@@ -199,6 +201,144 @@ class ProductSitemap(SitemapRuleSpider):
 
 模板爬虫通过 `configure_sessions()` 转发所有配置（代理、隐身、超时等）给 Scrapling。
 
+## 多 Session 路由
+
+在同一爬虫内混合使用快速 HTTP 和隐身浏览器：
+
+```python
+from openspider.spiders.base import BaseSpider
+from scrapling.spiders import Request
+
+class MixedSpider(BaseSpider):
+    name = "mixed"
+    start_urls = ["https://example.com"]
+    stealth_url_patterns = ["/protected", "/login"]
+
+    async def parse(self, response):
+        for link in response.css("a::attr(href)").getall():
+            if any(pat in link for pat in self.stealth_url_patterns):
+                yield Request(link, sid="stealth", callback=self.parse_stealth)
+            else:
+                yield response.follow(link, callback=self.parse)
+
+    async def parse_stealth(self, response):
+        yield {"url": response.url, "title": response.css("title::text").get("")}
+
+    def configure_sessions(self, manager):
+        from scrapling.fetchers import FetcherSession, AsyncStealthySession
+        manager.add("default", FetcherSession(impersonate="chrome"))
+        manager.add("stealth", AsyncStealthySession(headless=True, solve_cloudflare=True), lazy=True)
+```
+
+## XHR/API 拦截
+
+拦截 SPA 应用的 API 请求，直接获取 JSON 数据：
+
+```python
+class SPASpider(BaseSpider):
+    name = "spa_demo"
+    start_urls = ["https://spa-app.example.com"]
+    use_stealth = True
+    network_idle = True
+    capture_xhr = r"https://api\.example\.com/.*"  # 拦截匹配的 API 请求
+    wait_selector = ".data-loaded"
+
+    async def run(self):
+        page = await self.get(self.start_urls[0])
+        # 从拦截的 XHR 中获取结构化数据
+        if hasattr(page, 'captured_xhr'):
+            for xhr in page.captured_xhr:
+                data = xhr.json() if hasattr(xhr, 'json') else None
+                if data:
+                    yield {"api_data": data}
+```
+
+## 页面交互（page_action / page_setup）
+
+在浏览器中执行自定义操作：
+
+```python
+async def scroll_and_wait(page):
+    """page_action: 滚动到底部加载更多"""
+    await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+    await page.wait_for_timeout(2000)
+
+async def close_popups(page):
+    """page_setup: 关闭弹窗"""
+    try:
+        btn = page.locator("#cookie-accept")
+        if await btn.count() > 0:
+            await btn.click(timeout=2000)
+    except Exception:
+        pass
+
+class ScrollSpider(BaseSpider):
+    name = "scroll_demo"
+    use_stealth = True
+    page_action = scroll_and_wait   # 加载后执行
+    page_setup = close_popups        # 加载前执行
+```
+
+## 自适应选择器（adaptive）
+
+页面结构变化后自动重定位元素：
+
+```python
+class AdaptiveSpider(BaseSpider):
+    name = "adaptive_demo"
+    adaptive = True          # 启用自适应选择器
+
+    async def run(self):
+        page = await self.get(self.start_urls[0])
+        # select() 自动应用 adaptive 配置
+        for item in self.select(page, ".product-item"):
+            yield {"title": item.css("h2::text").get("")}
+```
+
+## 数据导出
+
+BaseSpider 提供便捷的导出工具：
+
+```python
+# 在 on_complete 中导出
+async def on_complete(self):
+    # 直接使用 Scrapling 的 items 导出
+    self.export_items(self._items, format="json", path="output.json")
+    self.export_items(self._items, format="csv", path="output.csv")
+    self.export_items(self._items, format="parquet", path="output.parquet")
+
+    # 获取 pandas DataFrame
+    df = self.export_items(self._items, format="pandas")
+```
+
+数据管道也支持 parquet 格式：
+```python
+sinks = [
+    {"type": "parquet", "path": "./data/output.parquet"},
+    {"type": "csv", "path": "./data/output.csv"},
+]
+```
+
+## 断点恢复
+
+通过 pause/resume API 暂停并恢复爬取：
+
+```
+POST /spiders/{name}/pause    # 暂停（Scrapling 保存断点到 crawldir）
+POST /spiders/{name}/resume   # 从断点恢复
+```
+
+暂停时 Scrapling 自动将未完成的请求保存到 `crawl_data/{spider_name}/`，
+恢复时自动从断点继续，无需重新抓取已处理的页面。
+
+## development_mode 开发调试
+
+设置 `development_mode = True` 启用响应缓存：
+- 首次运行：请求发送到目标网站，响应缓存到磁盘
+- 后续运行：直接读取缓存，不重新请求
+- 缓存位置：`.scrapling_cache/{spider.name}/`
+- **不要在生产环境启用**
+
 ## API 接口
 
 ```
@@ -206,12 +346,13 @@ GET    /spiders                  # 列出所有爬虫
 POST   /spiders/{name}/start     # 启动（Body: {"params": {...}}）
 POST   /spiders/{name}/stop      # 停止
 POST   /spiders/{name}/pause     # 暂停（crawldir 保留断点）
+POST   /spiders/{name}/resume    # 从断点恢复
 DELETE /spiders/{name}           # 删除
 POST   /spiders/upload           # 上传 .py 文件
 GET    /tasks?spider=&status=    # 任务列表
 GET    /tasks/{id}/logs          # 任务日志
 GET    /items?spider=            # 数据查询
-GET    /export/{name}?format=    # 导出（json/jsonl/csv）
+GET    /export/{name}?format=    # 导出（json/jsonl/csv/parquet）
 GET    /health                   # 健康检查
 GET    /capabilities             # 能力描述（给 AI）
 ```
@@ -262,6 +403,7 @@ class NewsSpider(BaseSpider):
 | `json` | JSON/JSONL 文件 | 自动创建 |
 | `kafka` | Kafka topic（需 aiokafka） | `auto_create=True` 自动建 topic |
 | `doris` | Doris HTTP Stream Load | `auto_create=True` 自动建表 |
+| `parquet` | Parquet 列式存储（需 pandas + pyarrow） | 自动创建目录 |
 
 不配置 sinks 则只写默认 MySQL items 表。主键类型映射：`string→VARCHAR(500)`、`text→TEXT`、`int→BIGINT`、`float→DOUBLE`、`datetime→DATETIME`。
 

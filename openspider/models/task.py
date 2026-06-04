@@ -3,8 +3,7 @@
 import enum
 from datetime import datetime
 
-from sqlalchemy import BigInteger, DateTime, Enum, Integer, String, Text, func
-from sqlalchemy.dialects.mysql import JSON
+from sqlalchemy import DateTime, Enum, Integer, JSON, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from openspider.storage.database import Base
@@ -24,7 +23,7 @@ class TaskModel(Base):
     """任务运行记录表"""
     __tablename__ = "tasks"
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     spider_name: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
     status: Mapped[TaskStatus] = mapped_column(
         Enum(TaskStatus), default=TaskStatus.PENDING, nullable=False

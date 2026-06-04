@@ -94,8 +94,9 @@ class SpiderRunner:
             # 判断模式
             _has_custom_parse = type(spider).parse is not BaseSpider.parse
 
-            if _has_custom_parse:
-                # 高级模式：走 Scrapling Spider（并发/去重/代理全复用）
+            if _has_custom_parse or spider.development_mode:
+                # 高级模式 或 development_mode：走 Scrapling Spider
+                # development_mode 需要 Spider 框架才能缓存响应到磁盘
                 await self._run_with_scrapling(spider, pipeline)
             else:
                 # 简单模式：直接跑 run()，用 FetcherSession
@@ -136,16 +137,32 @@ class SpiderRunner:
 
     async def _run_simple(self, spider: BaseSpider, pipeline=None) -> None:
         """简单模式：直接跑 run()，用 FetcherSession"""
-        from scrapling.fetchers import FetcherSession
+        from scrapling.fetchers import FetcherSession, ProxyRotator
+
+        # 构建 session 参数
+        session_kwargs = {
+            "impersonate": spider.impersonate,
+            "http3": spider.http3,
+            "stealthy_headers": spider.stealthy_headers,
+            "verify": spider.ssl_verify,
+            "timeout": spider.timeout,
+        }
+        if spider.default_headers:
+            session_kwargs["headers"] = spider.default_headers
+        if spider.cookies:
+            session_kwargs["cookies"] = spider.cookies
+        if spider.follow_redirects is False:
+            session_kwargs["follow_redirects"] = False
+
+        # 代理轮换（ProxyRotator）
+        if spider.proxies:
+            if len(spider.proxies) > 1:
+                session_kwargs["proxy_rotator"] = ProxyRotator(spider.proxies)
+            else:
+                session_kwargs["proxy"] = spider.proxies[0]
 
         # FetcherSession 是 context manager，需要进入上下文才可用
-        session_ctx = FetcherSession(
-            impersonate=spider.impersonate,
-            http3=spider.http3,
-            stealthy_headers=spider.stealthy_headers,
-            verify=spider.ssl_verify,
-            timeout=spider.timeout,
-        )
+        session_ctx = FetcherSession(**session_kwargs)
         session = session_ctx.__enter__()
         spider._session = session
 
@@ -168,6 +185,7 @@ class SpiderRunner:
 
         简单模式：run() 包装为 parse()
         高级模式：直接用用户的 parse()
+        development_mode：自动走此路径，启用响应缓存
         """
         scrapling_spider_cls = self._create_scrapling_spider(spider)
         scrapling_spider = scrapling_spider_cls(crawldir=str(self._get_crawldir()))
@@ -189,105 +207,19 @@ class SpiderRunner:
                             await pipeline.process(processed)
                         self.items_scraped += 1
 
-        self.requests_made = getattr(result, 'total_requests', 0) or self.requests_made
+        # 读取 Scrapling 详细统计
+        if hasattr(result, 'stats') and result.stats:
+            stats = result.stats
+            self.requests_made = getattr(stats, 'total_requests', 0) or self.requests_made
+            logger.info(f"Scrapling stats: {stats}")
 
     def _create_scrapling_spider(self, spider: BaseSpider):
         """动态创建 Scrapling Spider 子类
 
-        转发所有配置：Spider 属性 + Session 配置（via configure_sessions）
+        委托 scrapling_utils 统一处理配置转发。
         """
-        from scrapling.spiders import Spider, Response
-        from scrapling.fetchers import FetcherSession, AsyncStealthySession, ProxyRotator
-
-        base_spider = spider
-        _has_custom_parse = type(spider).parse is not BaseSpider.parse
-
-        # 构建 session 参数
-        session_kwargs = {
-            "impersonate": spider.impersonate,
-            "http3": spider.http3,
-            "stealthy_headers": spider.stealthy_headers,
-            "verify": spider.ssl_verify,
-            "timeout": spider.timeout,
-        }
-        if spider.default_headers:
-            session_kwargs["headers"] = spider.default_headers
-        if spider.cookies:
-            session_kwargs["cookies"] = spider.cookies
-        if spider.follow_redirects is False:
-            session_kwargs["follow_redirects"] = False
-
-        # 代理轮换
-        proxy_rotator = None
-        if spider.proxies:
-            if len(spider.proxies) > 1:
-                proxy_rotator = ProxyRotator(spider.proxies)
-            else:
-                session_kwargs["proxy"] = spider.proxies[0]
-
-        # 浏览器 session 配置
-        stealth_kwargs = {
-            "headless": True,
-            "solve_cloudflare": spider.solve_cloudflare,
-            "block_webrtc": spider.block_webrtc,
-            "hide_canvas": spider.hide_canvas,
-            "allow_webgl": spider.allow_webgl,
-            "real_chrome": spider.real_chrome,
-            "cdp_url": spider.cdp_url,
-            "user_data_dir": spider.user_data_dir,
-            "max_pages": spider.max_pages,
-            "block_ads": spider.block_ads,
-            "dns_over_https": spider.dns_over_https,
-            "locale": spider.locale,
-            "timezone_id": spider.timezone_id,
-            "wait": spider.wait,
-            "disable_resources": spider.disable_resources,
-            "network_idle": spider.network_idle,
-            "load_dom": spider.load_dom,
-            "wait_selector": spider.wait_selector,
-            "wait_selector_state": spider.wait_selector_state,
-            "init_script": spider.init_script,
-            "capture_xhr": spider.capture_xhr,
-        }
-
-        class DynamicSpider(Spider):
-            name = base_spider.name
-            start_urls = base_spider.start_urls
-            concurrent_requests = base_spider.concurrent_requests
-            download_delay = base_spider.download_delay
-            robots_txt_obey = base_spider.robots_txt_obey
-            development_mode = base_spider.development_mode
-
-            def configure_sessions(self_inner, manager):
-                """配置 Scrapling session，转发用户的所有配置"""
-                if base_spider.use_stealth:
-                    sess = AsyncStealthySession(**stealth_kwargs)
-                else:
-                    sess = FetcherSession(**session_kwargs)
-
-                if proxy_rotator:
-                    # 代理轮换注入到 session
-                    if base_spider.use_stealth:
-                        stealth_kwargs["proxy_rotator"] = proxy_rotator
-                    else:
-                        session_kwargs["proxy_rotator"] = proxy_rotator
-
-                manager.add("default", sess)
-
-            async def parse(self_inner, response: Response):
-                if _has_custom_parse:
-                    # 高级模式：直接调用用户的 parse()
-                    async for result in base_spider.parse(response):
-                        yield result
-                else:
-                    # 简单模式：调用用户的 run()，把 response 注入
-                    base_spider._scrapling_response = response
-                    # 简单模式下 run() 需要 session，注入 Scrapling 的 session
-                    base_spider._session = self_inner._session
-                    async for result in base_spider.run():
-                        yield result
-
-        return DynamicSpider
+        from openspider.core.scrapling_utils import create_scrapling_spider
+        return create_scrapling_spider(spider)
 
     def _get_crawldir(self):
         from openspider.config import settings

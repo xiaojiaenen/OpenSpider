@@ -4,6 +4,7 @@ from openspider.core.sinks.excel_sink import ExcelSink
 from openspider.core.sinks.json_sink import JsonSink
 from openspider.core.sinks.kafka_sink import KafkaSink
 from openspider.core.sinks.doris_sink import DorisSink
+from openspider.core.sinks.parquet_sink import ParquetSink
 
 SINK_REGISTRY = {
     "csv": CsvSink,
@@ -11,6 +12,7 @@ SINK_REGISTRY = {
     "json": JsonSink,
     "kafka": KafkaSink,
     "doris": DorisSink,
+    "parquet": ParquetSink,
 }
 
 def get_sink_class(sink_type: str):

@@ -17,6 +17,7 @@ class SpiderInfo(BaseModel):
     status: str = "idle"
     use_stealth: bool = False
     owner_user_id: str | None = None
+    is_public: bool = False
     is_running: bool = False
     items_scraped: int = 0
     requests_made: int = 0
@@ -46,6 +47,11 @@ class SpiderUploadResponse(BaseModel):
     success: bool
     message: str
     registered_spiders: list[str] = []
+
+
+class SpiderVisibilityRequest(BaseModel):
+    """切换爬虫公开/私有"""
+    is_public: bool
 
 
 # === 任务相关 ===

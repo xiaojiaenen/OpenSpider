@@ -3,8 +3,7 @@
 import enum
 from datetime import datetime
 
-from sqlalchemy import BigInteger, Boolean, DateTime, Enum, Integer, String, Text, func
-from sqlalchemy.dialects.mysql import JSON
+from sqlalchemy import Boolean, DateTime, Enum, Integer, JSON, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from openspider.storage.database import Base
@@ -20,7 +19,7 @@ class ScheduleModel(Base):
     """调度任务表"""
     __tablename__ = "schedules"
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     spider_name: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
     cron: Mapped[str] = mapped_column(String(64), nullable=False)  # cron 表达式
     params: Mapped[dict | None] = mapped_column(JSON, nullable=True)

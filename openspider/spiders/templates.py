@@ -1,7 +1,7 @@
 """模板爬虫 — RuleSpider、SitemapRuleSpider
 
 包装 Scrapling 的 CrawlSpider / SitemapSpider，
-正确转发全部配置，实现 configure_sessions()。
+通过 scrapling_utils 统一转发全部配置。
 """
 
 from __future__ import annotations
@@ -10,49 +10,9 @@ import asyncio
 from collections.abc import AsyncGenerator
 
 from openspider.spiders.base import BaseSpider
-
-
-def _build_session_kwargs(spider: BaseSpider) -> dict:
-    """从 BaseSpider 构建 FetcherSession 参数"""
-    kwargs = {
-        "impersonate": spider.impersonate,
-        "http3": spider.http3,
-        "stealthy_headers": spider.stealthy_headers,
-        "verify": spider.ssl_verify,
-        "timeout": spider.timeout,
-    }
-    if spider.default_headers:
-        kwargs["headers"] = spider.default_headers
-    if spider.cookies:
-        kwargs["cookies"] = spider.cookies
-    return kwargs
-
-
-def _build_stealth_kwargs(spider: BaseSpider) -> dict:
-    """从 BaseSpider 构建 AsyncStealthySession 参数"""
-    return {
-        "headless": True,
-        "solve_cloudflare": spider.solve_cloudflare,
-        "block_webrtc": spider.block_webrtc,
-        "hide_canvas": spider.hide_canvas,
-        "allow_webgl": spider.allow_webgl,
-        "real_chrome": spider.real_chrome,
-        "cdp_url": spider.cdp_url,
-        "user_data_dir": spider.user_data_dir,
-        "max_pages": spider.max_pages,
-        "block_ads": spider.block_ads,
-        "dns_over_https": spider.dns_over_https,
-        "locale": spider.locale,
-        "timezone_id": spider.timezone_id,
-        "wait": spider.wait,
-        "disable_resources": spider.disable_resources,
-        "network_idle": spider.network_idle,
-        "load_dom": spider.load_dom,
-        "wait_selector": spider.wait_selector,
-        "wait_selector_state": spider.wait_selector_state,
-        "init_script": spider.init_script,
-        "capture_xhr": spider.capture_xhr,
-    }
+from openspider.core.scrapling_utils import (
+    build_session_kwargs, build_stealth_kwargs, inject_proxy, configure_session,
+)
 
 
 class RuleSpider(BaseSpider):
@@ -87,22 +47,9 @@ class RuleSpider(BaseSpider):
 
     def _create_scrapling_spider(self):
         from scrapling.spiders import CrawlSpider, Response
-        from scrapling.fetchers import FetcherSession, AsyncStealthySession, ProxyRotator
 
         base_self = self
         rules_list = self.rules()
-        session_kwargs = _build_session_kwargs(self)
-        stealth_kwargs = _build_stealth_kwargs(self)
-
-        if self.proxies:
-            rotator = ProxyRotator(self.proxies) if len(self.proxies) > 1 else None
-            if rotator:
-                if self.use_stealth:
-                    stealth_kwargs["proxy_rotator"] = rotator
-                else:
-                    session_kwargs["proxy_rotator"] = rotator
-            elif self.proxies:
-                session_kwargs["proxy"] = self.proxies[0]
 
         class DynamicCrawlSpider(CrawlSpider):
             name = base_self.name
@@ -113,10 +60,7 @@ class RuleSpider(BaseSpider):
             development_mode = base_self.development_mode
 
             def configure_sessions(self_inner, manager):
-                if base_self.use_stealth:
-                    manager.add("default", AsyncStealthySession(**stealth_kwargs))
-                else:
-                    manager.add("default", FetcherSession(**session_kwargs))
+                configure_session(manager, base_self)
 
             def rules(self_inner):
                 return rules_list
@@ -178,22 +122,9 @@ class SitemapRuleSpider(BaseSpider):
 
     def _create_scrapling_spider(self):
         from scrapling.spiders import SitemapSpider, Response
-        from scrapling.fetchers import FetcherSession, AsyncStealthySession, ProxyRotator
 
         base_self = self
         rules_list = self.rules()
-        session_kwargs = _build_session_kwargs(self)
-        stealth_kwargs = _build_stealth_kwargs(self)
-
-        if self.proxies:
-            rotator = ProxyRotator(self.proxies) if len(self.proxies) > 1 else None
-            if rotator:
-                if self.use_stealth:
-                    stealth_kwargs["proxy_rotator"] = rotator
-                else:
-                    session_kwargs["proxy_rotator"] = rotator
-            elif self.proxies:
-                session_kwargs["proxy"] = self.proxies[0]
 
         class DynamicSitemapSpider(SitemapSpider):
             name = base_self.name
@@ -205,10 +136,7 @@ class SitemapRuleSpider(BaseSpider):
             development_mode = base_self.development_mode
 
             def configure_sessions(self_inner, manager):
-                if base_self.use_stealth:
-                    manager.add("default", AsyncStealthySession(**stealth_kwargs))
-                else:
-                    manager.add("default", FetcherSession(**session_kwargs))
+                configure_session(manager, base_self)
 
             def rules(self_inner):
                 return rules_list

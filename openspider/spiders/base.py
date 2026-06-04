@@ -230,6 +230,99 @@ class BaseSpider:
         return item
 
     # ============================================================
+    #  选择器工具
+    # ============================================================
+
+    def select(self, response, selector: str, css: bool = True) -> object:
+        """统一选择器方法，自动应用 adaptive 配置
+
+        Args:
+            response: Scrapling Response 对象
+            selector: CSS 或 XPath 选择器
+            css: True 为 CSS 选择器，False 为 XPath
+
+        Returns:
+            选择结果
+
+        使用 adaptive 时：
+            select(response, ".title")  # 自动应用 adaptive 配置
+        """
+        kwargs = {}
+        if self.adaptive:
+            kwargs["adaptive"] = True
+            if self.adaptive_storage:
+                kwargs["adaptive_domain"] = self.adaptive_storage
+
+        if css:
+            return response.css(selector, **kwargs)
+        else:
+            return response.xpath(selector, **kwargs)
+
+    # ============================================================
+    #  数据导出工具
+    # ============================================================
+
+    @staticmethod
+    def export_items(items, format: str = "json", path: str | None = None):
+        """将爬取结果导出为多种格式
+
+        Args:
+            items: Scrapling result.items 或普通 list
+            format: 导出格式 (json/csv/parquet/pandas)
+            path: 文件路径（parquet/csv 时必须）
+
+        Returns:
+            pandas DataFrame（format="pandas"）或 None
+        """
+        if format == "json":
+            if hasattr(items, 'to_json'):
+                return items.to_json(path or "")
+            import json
+            data = list(items) if not isinstance(items, list) else items
+            if path:
+                with open(path, "w", encoding="utf-8") as f:
+                    json.dump(data, f, ensure_ascii=False, indent=2)
+            return data
+
+        elif format == "csv":
+            if hasattr(items, 'to_csv'):
+                return items.to_csv(path or "")
+            import csv
+            data = list(items) if not isinstance(items, list) else items
+            if data and path:
+                with open(path, "w", newline="", encoding="utf-8") as f:
+                    writer = csv.DictWriter(f, fieldnames=data[0].keys())
+                    writer.writeheader()
+                    writer.writerows(data)
+
+        elif format == "parquet":
+            if hasattr(items, 'to_parquet'):
+                return items.to_parquet(path or "output.parquet")
+            # 通过 pandas 转换
+            try:
+                import pandas as pd
+                data = list(items) if not isinstance(items, list) else items
+                df = pd.DataFrame(data)
+                if path:
+                    df.to_parquet(path, index=False)
+                return df
+            except ImportError:
+                raise ImportError("需要安装 pandas 和 pyarrow: pip install pandas pyarrow")
+
+        elif format == "pandas":
+            if hasattr(items, 'to_pandas'):
+                return items.to_pandas()
+            try:
+                import pandas as pd
+                data = list(items) if not isinstance(items, list) else items
+                return pd.DataFrame(data)
+            except ImportError:
+                raise ImportError("需要安装 pandas: pip install pandas")
+
+        else:
+            raise ValueError(f"不支持的导出格式: {format}（支持: json/csv/parquet/pandas）")
+
+    # ============================================================
     #  属性和工具
     # ============================================================
 

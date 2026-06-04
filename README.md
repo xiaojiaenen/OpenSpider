@@ -4,14 +4,23 @@
 
 ## 功能
 
+- **用户系统**：注册、登录、JWT 认证、个人资料管理
 - **多爬虫管理**：注册、启停、暂停恢复、失败重试
 - **热加载**：`spiders/` 目录新增文件自动注册
 - **定时调度**：支持 cron 表达式定时触发
 - **崩溃恢复**：平台重启后自动检测并恢复
-- **断点续爬**：利用 Scrapling 的 crawldir 机制
-- **数据导出**：JSON / JSONL / CSV
-- **反爬绕过**：Cloudflare 破解、浏览器指纹控制、代理轮换
+- **断点续爬**：pause/resume API，利用 Scrapling 的 crawldir 机制
+- **数据导出**：JSON / JSONL / CSV / Parquet
+- **数据管道**：同时写入 CSV/Excel/JSON/Kafka/Doris/Parquet
+- **反爬绕过**：Cloudflare 破解、浏览器指纹控制、代理轮换（ProxyRotator）
 - **全站兼容**：支持 ASP/JSP/PHP 老旧站点，自动编码检测
+- **多 Session 路由**：同一爬虫内混合 HTTP + 隐身浏览器
+- **XHR 拦截**：capture_xhr 捕获 SPA 应用的 API 数据
+- **页面交互**：page_action/page_setup 滚动、点击、关闭弹窗
+- **自适应选择器**：adaptive 模式，页面结构变化后自动重定位
+- **开发调试**：development_mode 响应缓存，免重请求
+- **用户隔离**：JWT 认证 + 多租户数据隔离
+- **Web UI**：React + Ant Design 管理界面
 - **AI 集成**：标准化 API + Skill 描述，外部 AI 可直接调用
 
 ## 快速开始
@@ -105,11 +114,19 @@ openspider validate <file.py>         # 验证爬虫文件
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| GET | `/health` | 健康检查 |
+| POST | `/auth/register` | 注册新用户 |
+| POST | `/auth/login` | 登录，获取 JWT |
+| POST | `/auth/refresh` | 刷新 token |
+| GET | `/auth/me` | 当前用户信息 |
+| PUT | `/auth/me` | 更新个人资料 |
+| PUT | `/auth/me/password` | 修改密码 |
+| GET | `/health` | 健康检查（无需认证） |
 | GET | `/capabilities` | 能力描述（给 AI 用） |
 | GET | `/spiders` | 爬虫列表 |
 | POST | `/spiders/{name}/start` | 启动爬虫 |
 | POST | `/spiders/{name}/stop` | 停止爬虫 |
+| POST | `/spiders/{name}/pause` | 暂停爬虫（断点保留） |
+| POST | `/spiders/{name}/resume` | 从断点恢复 |
 | GET | `/tasks` | 任务列表 |
 | GET | `/items` | 数据查询 |
 | GET | `/export/{name}` | 数据导出 |
@@ -121,11 +138,31 @@ openspider validate <file.py>         # 验证爬虫文件
 OpenSpider/
 ├── openspider/
 │   ├── core/           # 核心引擎、注册表、调度器、恢复
+│   │   ├── engine.py   # 核心引擎（含 resume 断点恢复）
+│   │   ├── registry.py # 爬虫注册表（热加载）
+│   │   ├── runner.py   # 爬虫执行器
+│   │   ├── pipeline.py # 数据管道（多 Sink 分发）
+│   │   ├── scrapling_utils.py # Scrapling 配置转发（公共）
+│   │   └── sinks/      # 6 种 Sink：csv/excel/json/kafka/doris/parquet
 │   ├── spiders/        # 爬虫基类、模板、示例
-│   ├── api/            # FastAPI 路由
-│   ├── models/         # 数据模型
-│   ├── storage/        # 数据库连接
-│   └── utils/          # 工具（编码、表单、URL、选择器）
+│   │   ├── base.py     # BaseSpider（select/export_items/adaptive）
+│   │   ├── templates.py # RuleSpider/SitemapRuleSpider
+│   │   └── examples/   # 多 Session 路由、XHR 拦截、页面交互示例
+│   ├── api/            # FastAPI 路由（JWT 认证）
+│   │   ├── auth.py     # JWT 认证中间件
+│   │   ├── auth_routes.py # 注册/登录/刷新/个人资料
+│   │   ├── routes.py   # 爬虫管理/任务/数据/导出
+│   │   └── schedule_routes.py # 调度 CRUD
+│   ├── models/         # 数据模型（含 UserModel）
+│   ├── storage/        # 数据库连接 + Alembic 迁移
+│   └── utils/          # 工具（编码、表单、URL、安全/JWT）
+├── web/                # React + Ant Design 前端
+│   ├── src/
+│   │   ├── pages/      # Login/Register/Dashboard/Spiders/Tasks/Schedules/Items/Settings
+│   │   ├── layouts/    # MainLayout（侧边栏 + Header）
+│   │   ├── services/   # API 封装（axios + JWT 拦截器）
+│   │   └── stores/     # Zustand 状态管理（auth）
+│   └── package.json
 ├── skill/              # AI 集成 Skill 描述
 ├── docs/               # 设计文档
 └── tests/              # 测试

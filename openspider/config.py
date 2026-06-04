@@ -24,17 +24,24 @@ class Settings(BaseSettings):
     crawl_data_dir: Path = Path("./crawl_data")
     max_concurrent_spiders: int = 10
 
+    # 前端
+    frontend_dir: Path = Path("./web/dist")
+
     # 日志
     log_level: str = "INFO"
     log_file: Path = Path("./logs/openspider.log")
 
-    # API 认证
-    api_key: str = ""             # 共享模式 Key
-    admin_api_key: str = ""       # 管理员 Key（可看所有用户数据）
+    # 认证
+    jwt_secret_key: str = ""          # 必填，否则启动报错
+    jwt_algorithm: str = "HS256"
+    jwt_access_expire_minutes: int = 30
+    jwt_refresh_expire_days: int = 7
 
     @property
     def database_url(self) -> str:
-        """异步 MySQL 连接 URL"""
+        """异步数据库连接 URL（MySQL 或 SQLite）"""
+        if self.mysql_host == "sqlite":
+            return "sqlite+aiosqlite:///./openspider.db"
         return (
             f"mysql+aiomysql://{self.mysql_user}:{self.mysql_password}"
             f"@{self.mysql_host}:{self.mysql_port}/{self.mysql_database}"
@@ -43,7 +50,9 @@ class Settings(BaseSettings):
 
     @property
     def sync_database_url(self) -> str:
-        """同步 MySQL 连接 URL（用于 Alembic 迁移）"""
+        """同步数据库连接 URL（用于 Alembic 迁移）"""
+        if self.mysql_host == "sqlite":
+            return "sqlite:///./openspider.db"
         return (
             f"mysql+pymysql://{self.mysql_user}:{self.mysql_password}"
             f"@{self.mysql_host}:{self.mysql_port}/{self.mysql_database}"

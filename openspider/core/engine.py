@@ -140,8 +140,58 @@ class Engine:
 
         # 发送停止信号，Scrapling 会将未完成的请求保存到 crawldir
         await runner.stop()
-        logger.info(f"爬虫已暂停: {name}（断点已保存）")
+
+        # 更新任务状态为 PAUSED 并记录 crawldir
+        crawldir = str(runner._get_crawldir())
+        async with async_session() as session:
+            from sqlalchemy import update as sa_update
+            from openspider.models.task import TaskModel, TaskStatus
+            await session.execute(
+                sa_update(TaskModel)
+                .where(TaskModel.id == runner.task_id)
+                .values(status=TaskStatus.PAUSED, crawldir=crawldir)
+            )
+            await session.commit()
+
+        logger.info(f"爬虫已暂停: {name}（断点已保存到 {crawldir}）")
         return True
+
+    async def resume_spider(self, name: str, user_id: str | None = None) -> TaskModel:
+        """从断点恢复爬虫
+
+        从上一次暂停时 Scrapling 保存的 crawldir 恢复未完成的请求。
+
+        Raises:
+            ValueError: 爬虫不存在、已运行、或没有可恢复的断点
+        """
+        if name in self._runners and self._runners[name].is_running:
+            raise ValueError(f"爬虫 {name} 已在运行")
+
+        spider_cls = self.registry.get(name)
+        if spider_cls is None:
+            raise ValueError(f"爬虫 {name} 不存在")
+
+        # 查找最近的 PAUSED 任务及其 crawldir
+        from openspider.models.task import TaskModel, TaskStatus
+        async with async_session() as session:
+            from sqlalchemy import select as sa_select
+            result = await session.execute(
+                sa_select(TaskModel)
+                .where(TaskModel.spider_name == name, TaskModel.status == TaskStatus.PAUSED)
+                .order_by(TaskModel.created_at.desc())
+                .limit(1)
+            )
+            paused_task = result.scalar_one_or_none()
+
+        if paused_task is None or not paused_task.crawldir:
+            raise ValueError(f"爬虫 {name} 没有可恢复的断点")
+
+        crawldir = paused_task.crawldir
+        logger.info(f"从断点恢复爬虫: {name} (crawldir: {crawldir})")
+
+        # 启动新任务，传递原始参数
+        task = await self.start_spider(name, params=paused_task.params, user_id=user_id)
+        return task
 
     def get_spider_status(self, name: str) -> dict | None:
         """获取爬虫运行状态"""

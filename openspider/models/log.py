@@ -3,7 +3,7 @@
 import enum
 from datetime import datetime
 
-from sqlalchemy import BigInteger, DateTime, Enum, String, Text, func
+from sqlalchemy import DateTime, Enum, Integer, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from openspider.storage.database import Base
@@ -21,9 +21,9 @@ class LogModel(Base):
     """运行日志表"""
     __tablename__ = "logs"
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     spider_name: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
-    task_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True, index=True)
+    task_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     level: Mapped[LogLevel] = mapped_column(Enum(LogLevel), nullable=False)
     message: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(

@@ -8,11 +8,13 @@ from fastapi import APIRouter, HTTPException, Depends, Query
 from pydantic import BaseModel
 from sqlalchemy import select, func, update, delete
 
-from openspider.api.user_context import UserContext, get_user_context
+from openspider.api.auth import get_current_user
+from openspider.api.user_context import UserContext, get_ctx
+from openspider.models.user import UserModel
 from openspider.models.schedule import ScheduleModel, ScheduleStatus
 from openspider.storage.database import async_session
 
-schedule_router = APIRouter(prefix="/schedules", tags=["schedules"])
+schedule_router = APIRouter(prefix="/schedules", tags=["schedules"], dependencies=[Depends(get_current_user)])
 
 
 # === 请求/响应模型 ===
@@ -49,7 +51,7 @@ class ScheduleListResponse(BaseModel):
 # === 路由 ===
 
 @schedule_router.get("", response_model=ScheduleListResponse)
-async def list_schedules(ctx: UserContext = Depends(get_user_context)):
+async def list_schedules(ctx: UserContext = Depends(get_ctx)):
     """列出所有调度"""
     async with async_session() as session:
         query = select(ScheduleModel).order_by(ScheduleModel.created_at.desc())
@@ -77,7 +79,7 @@ async def list_schedules(ctx: UserContext = Depends(get_user_context)):
 
 
 @schedule_router.post("", response_model=ScheduleInfo)
-async def create_schedule(body: ScheduleCreate, ctx: UserContext = Depends(get_user_context)):
+async def create_schedule(body: ScheduleCreate, ctx: UserContext = Depends(get_ctx)):
     """创建调度"""
     from openspider.core.engine import _engine
     engine = _engine
@@ -118,7 +120,7 @@ async def create_schedule(body: ScheduleCreate, ctx: UserContext = Depends(get_u
 
 
 @schedule_router.get("/{schedule_id}", response_model=ScheduleInfo)
-async def get_schedule(schedule_id: int, ctx: UserContext = Depends(get_user_context)):
+async def get_schedule(schedule_id: int, ctx: UserContext = Depends(get_ctx)):
     """获取调度详情"""
     async with async_session() as session:
         result = await session.execute(
@@ -140,7 +142,7 @@ async def get_schedule(schedule_id: int, ctx: UserContext = Depends(get_user_con
 
 @schedule_router.put("/{schedule_id}", response_model=ScheduleInfo)
 async def update_schedule(schedule_id: int, body: ScheduleUpdate,
-                          ctx: UserContext = Depends(get_user_context)):
+                          ctx: UserContext = Depends(get_ctx)):
     """修改调度"""
     async with async_session() as session:
         result = await session.execute(
@@ -174,7 +176,7 @@ async def update_schedule(schedule_id: int, body: ScheduleUpdate,
 
 
 @schedule_router.delete("/{schedule_id}")
-async def delete_schedule(schedule_id: int, ctx: UserContext = Depends(get_user_context)):
+async def delete_schedule(schedule_id: int, ctx: UserContext = Depends(get_ctx)):
     """删除调度"""
     async with async_session() as session:
         result = await session.execute(
@@ -197,7 +199,7 @@ async def delete_schedule(schedule_id: int, ctx: UserContext = Depends(get_user_
 
 
 @schedule_router.post("/{schedule_id}/enable")
-async def enable_schedule(schedule_id: int, ctx: UserContext = Depends(get_user_context)):
+async def enable_schedule(schedule_id: int, ctx: UserContext = Depends(get_ctx)):
     """启用调度"""
     async with async_session() as session:
         result = await session.execute(
@@ -219,7 +221,7 @@ async def enable_schedule(schedule_id: int, ctx: UserContext = Depends(get_user_
 
 
 @schedule_router.post("/{schedule_id}/disable")
-async def disable_schedule(schedule_id: int, ctx: UserContext = Depends(get_user_context)):
+async def disable_schedule(schedule_id: int, ctx: UserContext = Depends(get_ctx)):
     """禁用调度"""
     async with async_session() as session:
         result = await session.execute(
@@ -242,7 +244,7 @@ async def disable_schedule(schedule_id: int, ctx: UserContext = Depends(get_user
 
 @schedule_router.get("/{schedule_id}/runs")
 async def schedule_runs(schedule_id: int, limit: int = Query(20, ge=1, le=100),
-                        ctx: UserContext = Depends(get_user_context)):
+                        ctx: UserContext = Depends(get_ctx)):
     """查看调度执行历史"""
     async with async_session() as session:
         result = await session.execute(

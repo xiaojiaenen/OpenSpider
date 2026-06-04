@@ -1,43 +1,42 @@
-"""API 认证 — API Key 机制"""
+"""JWT 认证"""
 
 from __future__ import annotations
 
-from fastapi import HTTPException, Security, Depends
-from fastapi.security import APIKeyHeader
+from fastapi import Depends, HTTPException
+from fastapi.security import OAuth2PasswordBearer
+from sqlalchemy import select
 
-from openspider.config import settings
+from openspider.models.user import UserModel, UserStatus
+from openspider.storage.database import async_session
+from openspider.utils.security import decode_token
 
-api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
-
-
-def get_api_key() -> str | None:
-    """从配置获取 API Key"""
-    return getattr(settings, "api_key", None)
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
 
 
-async def verify_api_key(api_key: str | None = Security(api_key_header)):
-    """验证 API Key
+async def get_current_user(token: str = Depends(oauth2_scheme)) -> UserModel:
+    """从 JWT 解码并查询用户"""
+    payload = decode_token(token)
+    if payload is None or payload.get("type") != "access":
+        raise HTTPException(status_code=401, detail="无效或过期的 token")
 
-    如果未配置 api_key，则跳过认证（开发模式）。
-    如果配置了 api_key，则请求必须携带正确的 Key。
-    """
-    expected_key = get_api_key()
+    user_id = payload.get("sub")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="无效的 token")
 
-    # 未配置 Key，跳过认证（开发模式）
-    if not expected_key:
-        return True
-
-    # 配置了 Key，必须验证
-    if api_key is None:
-        raise HTTPException(
-            status_code=401,
-            detail="缺少 API Key，请在请求头中添加 X-API-Key",
+    async with async_session() as session:
+        result = await session.execute(
+            select(UserModel).where(UserModel.id == int(user_id))
         )
+        user = result.scalar_one_or_none()
 
-    if api_key != expected_key:
-        raise HTTPException(
-            status_code=403,
-            detail="API Key 无效",
-        )
+    if user is None:
+        raise HTTPException(status_code=401, detail="用户不存在")
+    if user.status == UserStatus.DISABLED:
+        raise HTTPException(status_code=403, detail="账户已禁用")
+    return user
 
-    return True
+
+async def require_admin(user: UserModel = Depends(get_current_user)) -> UserModel:
+    if user.role.value != "admin":
+        raise HTTPException(status_code=403, detail="需要管理员权限")
+    return user

@@ -3,8 +3,7 @@
 import enum
 from datetime import datetime
 
-from sqlalchemy import BigInteger, DateTime, Enum, Integer, String, Text, func
-from sqlalchemy.dialects.mysql import JSON
+from sqlalchemy import Boolean, DateTime, Enum, Integer, JSON, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from openspider.storage.database import Base
@@ -22,9 +21,13 @@ class SpiderStatus(str, enum.Enum):
 class SpiderModel(Base):
     """爬虫注册信息表"""
     __tablename__ = "spiders"
+    __table_args__ = (
+        UniqueConstraint('owner_user_id', 'name', name='uq_spider_owner_name'),
+    )
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
-    name: Mapped[str] = mapped_column(String(128), unique=True, nullable=False, index=True)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    is_public: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     description: Mapped[str] = mapped_column(Text, default="")
     file_path: Mapped[str] = mapped_column(String(512), nullable=False)
     schedule: Mapped[str | None] = mapped_column(String(64), nullable=True)

@@ -5,8 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, UploadFile, File, Query, Depends
-from openspider.api.auth import verify_api_key
-from openspider.api.user_context import UserContext, get_user_context
+from openspider.api.auth import get_current_user
+from openspider.api.user_context import UserContext, get_ctx
 from sqlalchemy import select, func, update
 
 from openspider import __version__
@@ -18,6 +18,7 @@ from openspider.api.schemas import (
     SpiderStartRequest,
     SpiderActionResponse,
     SpiderUploadResponse,
+    SpiderVisibilityRequest,
     TaskInfo,
     TaskListResponse,
     ItemInfo,
@@ -31,7 +32,7 @@ from openspider.models.item import ItemModel
 from openspider.models.log import LogModel
 from openspider.storage.database import async_session
 
-router = APIRouter(dependencies=[Depends(verify_api_key)])
+router = APIRouter(dependencies=[Depends(get_current_user)])
 
 # 不需要认证的路由单独创建
 public_router = APIRouter()
@@ -51,6 +52,20 @@ def get_engine():
     if _engine is None:
         raise HTTPException(status_code=503, detail="引擎未初始化")
     return _engine
+
+
+async def _get_spider_from_db(spider_id: int) -> SpiderModel:
+    """通过 id 从数据库查询爬虫"""
+    async with async_session() as session:
+        result = await session.execute(
+            select(SpiderModel).where(SpiderModel.id == spider_id)
+        )
+        db_spider = result.scalar_one_or_none()
+    if db_spider is None:
+        raise HTTPException(status_code=404, detail=f"爬虫 id={spider_id} 不存在")
+    return db_spider
+
+
 
 
 # === 健康检查（不需要认证） ===
@@ -81,19 +96,20 @@ async def health_check():
 # === 爬虫管理 ===
 
 @router.get("/spiders", response_model=SpiderListResponse)
-async def list_spiders(ctx: UserContext = Depends(get_user_context)):
-    """列出爬虫（按用户隔离）"""
+async def list_spiders(ctx: UserContext = Depends(get_ctx)):
+    """列出爬虫（按用户隔离，包含公开爬虫）"""
     engine = get_engine()
 
-    # 查询数据库获取 owner 信息
+    # 查询数据库获取 owner 和 is_public 信息
     async with async_session() as session:
         if ctx.is_admin:
             result = await session.execute(select(SpiderModel))
         else:
+            # 非管理员可见：自己的爬虫 + 公开爬虫
             result = await session.execute(
                 select(SpiderModel).where(
                     (SpiderModel.owner_user_id == ctx.user_id) |
-                    (SpiderModel.owner_user_id.is_(None))
+                    (SpiderModel.is_public == True)
                 )
             )
         db_spiders = {s.name: s for s in result.scalars().all()}
@@ -101,9 +117,6 @@ async def list_spiders(ctx: UserContext = Depends(get_user_context)):
     spiders = []
     for info in engine.registry.list_all():
         db_info = db_spiders.get(info["name"])
-        # 非管理员只看自己的或共享的
-        if not ctx.is_admin and db_info and db_info.owner_user_id and db_info.owner_user_id != ctx.user_id:
-            continue
         status_info = engine.get_spider_status(info["name"])
         spiders.append(SpiderInfo(
             name=info["name"],
@@ -111,6 +124,7 @@ async def list_spiders(ctx: UserContext = Depends(get_user_context)):
             schedule=info.get("schedule"),
             use_stealth=info.get("use_stealth", False),
             owner_user_id=db_info.owner_user_id if db_info else None,
+            is_public=db_info.is_public if db_info else False,
             is_running=status_info["is_running"] if status_info else False,
             items_scraped=status_info["items_scraped"] if status_info else 0,
             requests_made=status_info["requests_made"] if status_info else 0,
@@ -140,11 +154,19 @@ async def get_spider(name: str):
     )
 
 
-@router.post("/spiders/{name}/start", response_model=SpiderActionResponse)
-async def start_spider(name: str, body: SpiderStartRequest = SpiderStartRequest(),
-                       ctx: UserContext = Depends(get_user_context)):
-    """启动爬虫"""
+@router.post("/spiders/{spider_id}/start", response_model=SpiderActionResponse)
+async def start_spider(spider_id: int, body: SpiderStartRequest = SpiderStartRequest(),
+                       ctx: UserContext = Depends(get_ctx)):
+    """启动爬虫（允许 owner 或公开爬虫）"""
     engine = get_engine()
+    db_spider = await _get_spider_from_db(spider_id)
+
+    # 权限检查：owner 或公开爬虫
+    is_owner = db_spider.owner_user_id == ctx.user_id
+    if not is_owner and not db_spider.is_public and not ctx.is_admin:
+        raise HTTPException(status_code=403, detail="无权启动该爬虫")
+
+    name = db_spider.name
     try:
         task = await engine.start_spider(name, params=body.params, user_id=ctx.user_id)
         return SpiderActionResponse(
@@ -156,30 +178,73 @@ async def start_spider(name: str, body: SpiderStartRequest = SpiderStartRequest(
         raise HTTPException(status_code=400, detail=str(e))
 
 
-@router.post("/spiders/{name}/stop", response_model=SpiderActionResponse)
-async def stop_spider(name: str):
-    """停止爬虫"""
+@router.post("/spiders/{spider_id}/stop", response_model=SpiderActionResponse)
+async def stop_spider(spider_id: int, ctx: UserContext = Depends(get_ctx)):
+    """停止爬虫（仅 owner）"""
     engine = get_engine()
+    db_spider = await _get_spider_from_db(spider_id)
+
+    is_owner = db_spider.owner_user_id == ctx.user_id
+    if not is_owner and not ctx.is_admin:
+        raise HTTPException(status_code=403, detail="无权操作该爬虫")
+
+    name = db_spider.name
     stopped = await engine.stop_spider(name)
     if not stopped:
         raise HTTPException(status_code=400, detail=f"爬虫 {name} 未在运行")
     return SpiderActionResponse(success=True, message=f"爬虫 {name} 已停止")
 
 
-@router.post("/spiders/{name}/pause", response_model=SpiderActionResponse)
-async def pause_spider(name: str):
-    """暂停爬虫"""
+@router.post("/spiders/{spider_id}/pause", response_model=SpiderActionResponse)
+async def pause_spider(spider_id: int, ctx: UserContext = Depends(get_ctx)):
+    """暂停爬虫（仅 owner，断点保留，可通过 resume 恢复）"""
     engine = get_engine()
+    db_spider = await _get_spider_from_db(spider_id)
+
+    is_owner = db_spider.owner_user_id == ctx.user_id
+    if not is_owner and not ctx.is_admin:
+        raise HTTPException(status_code=403, detail="无权操作该爬虫")
+
+    name = db_spider.name
     paused = await engine.pause_spider(name)
     if not paused:
         raise HTTPException(status_code=400, detail=f"爬虫 {name} 未在运行")
-    return SpiderActionResponse(success=True, message=f"爬虫 {name} 已暂停")
+    return SpiderActionResponse(success=True, message=f"爬虫 {name} 已暂停（断点已保存）")
 
 
-@router.delete("/spiders/{name}", response_model=SpiderActionResponse)
-async def delete_spider(name: str):
-    """删除爬虫（先停止）"""
+@router.post("/spiders/{spider_id}/resume", response_model=SpiderActionResponse)
+async def resume_spider(spider_id: int, ctx: UserContext = Depends(get_ctx)):
+    """从断点恢复爬虫（仅 owner，恢复上一次暂停时的进度）"""
     engine = get_engine()
+    db_spider = await _get_spider_from_db(spider_id)
+
+    is_owner = db_spider.owner_user_id == ctx.user_id
+    if not is_owner and not ctx.is_admin:
+        raise HTTPException(status_code=403, detail="无权操作该爬虫")
+
+    name = db_spider.name
+    try:
+        task = await engine.resume_spider(name, user_id=ctx.user_id)
+        return SpiderActionResponse(
+            success=True,
+            message=f"爬虫 {name} 已从断点恢复",
+            task_id=task.id,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.delete("/spiders/{spider_id}", response_model=SpiderActionResponse)
+async def delete_spider(spider_id: int, ctx: UserContext = Depends(get_ctx)):
+    """删除爬虫（仅 owner，先停止）"""
+    engine = get_engine()
+    db_spider = await _get_spider_from_db(spider_id)
+
+    is_owner = db_spider.owner_user_id == ctx.user_id
+    if not is_owner and not ctx.is_admin:
+        raise HTTPException(status_code=403, detail="无权删除该爬虫")
+
+    name = db_spider.name
     if name in engine._runners and engine._runners[name].is_running:
         await engine.stop_spider(name)
 
@@ -190,16 +255,39 @@ async def delete_spider(name: str):
     # 从数据库删除
     async with async_session() as session:
         await session.execute(
-            update(SpiderModel).where(SpiderModel.name == name).values(status=SpiderStatus.DISABLED)
+            update(SpiderModel).where(SpiderModel.id == spider_id).values(status=SpiderStatus.DISABLED)
         )
         await session.commit()
 
     return SpiderActionResponse(success=True, message=f"爬虫 {name} 已删除")
 
 
+@router.put("/spiders/{spider_id}/visibility", response_model=SpiderActionResponse)
+async def set_spider_visibility(
+    spider_id: int, body: SpiderVisibilityRequest, ctx: UserContext = Depends(get_ctx)
+):
+    """切换爬虫公开/私有（仅 owner）"""
+    db_spider = await _get_spider_from_db(spider_id)
+
+    is_owner = db_spider.owner_user_id == ctx.user_id
+    if not is_owner and not ctx.is_admin:
+        raise HTTPException(status_code=403, detail="无权修改该爬虫的可见性")
+
+    async with async_session() as session:
+        await session.execute(
+            update(SpiderModel)
+            .where(SpiderModel.id == spider_id)
+            .values(is_public=body.is_public)
+        )
+        await session.commit()
+
+    visibility = "公开" if body.is_public else "私有"
+    return SpiderActionResponse(success=True, message=f"爬虫 {db_spider.name} 已设为{visibility}")
+
+
 @router.post("/spiders/upload", response_model=SpiderUploadResponse)
 async def upload_spider(file: UploadFile = File(...),
-                        ctx: UserContext = Depends(get_user_context)):
+                        ctx: UserContext = Depends(get_ctx)):
     """上传爬虫文件"""
     if not file.filename or not file.filename.endswith(".py"):
         raise HTTPException(status_code=400, detail="仅支持 .py 文件")
@@ -246,7 +334,7 @@ async def list_tasks(
     status: str | None = Query(None, description="按状态筛选"),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
-    ctx: UserContext = Depends(get_user_context),
+    ctx: UserContext = Depends(get_ctx),
 ):
     """任务列表（按用户隔离）"""
     async with async_session() as session:
@@ -359,7 +447,7 @@ async def list_items(
     task_id: int | None = Query(None, description="按任务筛选"),
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=200),
-    ctx: UserContext = Depends(get_user_context),
+    ctx: UserContext = Depends(get_ctx),
 ):
     """爬取数据查询（按用户隔离）"""
     offset = (page - 1) * page_size
@@ -368,15 +456,14 @@ async def list_items(
         query = select(ItemModel).order_by(ItemModel.crawled_at.desc())
         count_query = select(func.count()).select_from(ItemModel)
 
-        # 非管理员只能看自己的数据
+        # 非管理员只能看自己的或公开爬虫的数据
         if not ctx.is_admin and ctx.user_id:
-            # 通过 spider 的 owner 过滤
-            owned_spiders = select(SpiderModel.name).where(
+            visible_spiders = select(SpiderModel.name).where(
                 (SpiderModel.owner_user_id == ctx.user_id) |
-                (SpiderModel.owner_user_id.is_(None))
+                (SpiderModel.is_public == True)
             )
-            query = query.where(ItemModel.spider_name.in_(owned_spiders))
-            count_query = count_query.where(ItemModel.spider_name.in_(owned_spiders))
+            query = query.where(ItemModel.spider_name.in_(visible_spiders))
+            count_query = count_query.where(ItemModel.spider_name.in_(visible_spiders))
 
         if spider:
             query = query.where(ItemModel.spider_name == spider)
@@ -491,6 +578,12 @@ async def get_capabilities():
             "helper_methods": [
                 "get(url, **kwargs) -> Response",
                 "post(url, **kwargs) -> Response",
+                "follow(url, response=None, callback=None)",
+                "request(url, callback=None)",
+                "fetch(url, **kwargs) -> Response",
+                "select(response, selector, css=True) -> 自适应选择器",
+                "export_items(items, format, path) -> 导出工具",
+                "concurrent_fetch(urls, max_concurrent, callback)",
             ],
             "example_code": (
                 "from openspider.spiders.base import BaseSpider\n\n"
@@ -503,15 +596,35 @@ async def get_capabilities():
                 "            yield {'title': item.css('h2::text').get('')}\n"
             ),
         },
+        "scrapling_integration": {
+            "version": ">=0.4.8",
+            "features_used": [
+                "FetcherSession — TLS 指纹伪装 HTTP 请求",
+                "AsyncStealthySession — 隐身浏览器反爬绕过",
+                "Spider 框架 — 并发调度/请求去重/暂停恢复",
+                "CrawlSpider — 规则驱动自动链接跟进",
+                "SitemapSpider — Sitemap 驱动爬取",
+                "ProxyRotator — 多代理自动轮换",
+                "capture_xhr — XHR/Fetch API 拦截",
+                "page_action/page_setup — 浏览器页面交互",
+                "development_mode — 响应缓存（开发调试）",
+                "adaptive — 自适应选择器（页面结构变化后自动重定位）",
+                "crawldir — 断点保存/恢复",
+                "result.items + result.stats — 结果导出与统计",
+            ],
+        },
         "api_docs": "/docs",
-        "supported_export_formats": ["json", "jsonl", "csv"],
+        "supported_export_formats": ["json", "jsonl", "csv", "parquet"],
+        "api_extra": {
+            "resume": "POST /spiders/{name}/resume — 从断点恢复",
+        },
     }
 
 
 # === 管理员接口 ===
 
 @router.get("/admin/users")
-async def list_users(ctx: UserContext = Depends(get_user_context)):
+async def list_users(ctx: UserContext = Depends(get_ctx)):
     """列出所有用户（管理员）"""
     if not ctx.is_admin:
         raise HTTPException(status_code=403, detail="需要管理员权限")
@@ -526,7 +639,7 @@ async def list_users(ctx: UserContext = Depends(get_user_context)):
 
 
 @router.get("/admin/users/{user_id}/spiders")
-async def list_user_spiders(user_id: str, ctx: UserContext = Depends(get_user_context)):
+async def list_user_spiders(user_id: str, ctx: UserContext = Depends(get_ctx)):
     """查看某个用户的爬虫（管理员）"""
     if not ctx.is_admin:
         raise HTTPException(status_code=403, detail="需要管理员权限")
@@ -539,7 +652,7 @@ async def list_user_spiders(user_id: str, ctx: UserContext = Depends(get_user_co
 
 
 @router.get("/admin/stats")
-async def admin_stats(ctx: UserContext = Depends(get_user_context)):
+async def admin_stats(ctx: UserContext = Depends(get_ctx)):
     """全局统计（管理员）"""
     if not ctx.is_admin:
         raise HTTPException(status_code=403, detail="需要管理员权限")
