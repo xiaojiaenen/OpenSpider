@@ -78,22 +78,21 @@ class TaskListResponse(BaseModel):
 
 # === 数据相关 ===
 
-class ItemInfo(BaseModel):
-    """数据项信息"""
-    id: int
-    spider_name: str
-    task_id: int
-    data: dict
-    url: str = ""
-    crawled_at: datetime
-
-
-class ItemListResponse(BaseModel):
-    """数据列表响应"""
-    items: list[ItemInfo]
+class SpiderDataResponse(BaseModel):
+    """爬虫数据响应"""
+    items: list[dict]
     total: int
     page: int = 1
     page_size: int = 50
+    columns: list[str] = []
+
+
+class SpiderFieldsResponse(BaseModel):
+    """爬虫字段响应"""
+    spider_id: int
+    spider_name: str
+    fields: list[dict]
+    dedup_key: list[str] | None = None
 
 
 # === 系统相关 ===

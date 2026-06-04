@@ -97,13 +97,15 @@ export const taskApi = {
     api.get(`/tasks/${id}/logs`, { params: { limit } }).then((r) => r.data),
 }
 
-// ── Item API ─────────────────────────────────
+// ── Data API ─────────────────────────────────
 
-export const itemApi = {
-  list: (params?: { spider?: string; task_id?: number; page?: number; page_size?: number }) =>
-    api.get('/items', { params }).then((r) => r.data),
-  export: (spiderName: string, format = 'json') =>
-    api.get(`/export/${spiderName}`, { params: { format } }).then((r) => r.data),
+export const dataApi = {
+  list: (spiderId: number, params?: { page?: number; page_size?: number; user_id?: string }) =>
+    api.get(`/spiders/${spiderId}/data`, { params }).then((r) => r.data),
+  export: (spiderId: number, format = 'json', limit = 10000) =>
+    api.get(`/spiders/${spiderId}/export`, { params: { format, limit } }).then((r) => r.data),
+  fields: (spiderId: number) =>
+    api.get(`/spiders/${spiderId}/fields`).then((r) => r.data),
 }
 
 // ── Schedule API ─────────────────────────────
