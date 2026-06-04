@@ -317,7 +317,7 @@ const DashboardPage: React.FC = () => {
   ]
 
   const quickStartSpiders = spiders.filter(
-    (s) => !s.is_running && s.items_scraped !== undefined
+    (s) => !s.is_running && s.id != null
   )
 
   return (

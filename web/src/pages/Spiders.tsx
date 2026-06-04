@@ -38,13 +38,18 @@ const SpidersPage: React.FC = () => {
 
   useEffect(() => { load() }, [])
 
-  const handleAction = async (action: 'start' | 'stop' | 'pause' | 'resume' | 'remove', id: number) => {
+  const handleAction = async (action: 'start' | 'stop' | 'pause' | 'resume' | 'remove', id: number | null) => {
+    if (!id) {
+      message.warning('爬虫未同步，请刷新后重试')
+      return
+    }
     try {
       await spiderApi[action](id)
       message.success(`操作成功`)
       load()
     } catch (err: any) {
-      message.error(err.response?.data?.detail || '操作失败')
+      const detail = err.response?.data?.detail
+      message.error(typeof detail === 'string' ? detail : '操作失败')
     }
   }
 
@@ -190,7 +195,7 @@ const SpidersPage: React.FC = () => {
           <Button icon={<ReloadOutlined />} onClick={load}>刷新</Button>
         </Space>
       </div>
-      <Table columns={columns} dataSource={spiders} rowKey="id" loading={loading} size="middle" />
+      <Table columns={columns} dataSource={spiders} rowKey={(r: any) => r.id ?? r.name} loading={loading} size="middle" />
     </Card>
   )
 }

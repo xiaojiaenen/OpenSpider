@@ -98,22 +98,45 @@ async def list_spiders(ctx: UserContext = Depends(get_ctx)):
     """列出爬虫（按用户隔离，包含公开爬虫）"""
     engine = get_engine()
 
-    # 查询数据库获取 owner 和 is_public 信息
+    # 查询数据库获取 owner 和 is_public 信息，同时自动同步缺失的爬虫
     async with async_session() as session:
-        if ctx.is_admin:
-            result = await session.execute(select(SpiderModel))
-        else:
-            # 非管理员可见：自己的爬虫 + 公开爬虫
-            result = await session.execute(
-                select(SpiderModel).where(
-                    (SpiderModel.owner_user_id == ctx.user_id) |
-                    (SpiderModel.is_public == True)
-                )
-            )
+        result = await session.execute(select(SpiderModel))
         db_spiders = {s.name: s for s in result.scalars().all()}
+
+        # 自动同步注册表中有但数据库中没有的爬虫
+        changed = False
+        for name, cls in engine.registry.spiders.items():
+            if name not in db_spiders:
+                new_spider = SpiderModel(
+                    name=name,
+                    description=getattr(cls, "description", ""),
+                    file_path="",
+                    schedule=getattr(cls, "schedule", None),
+                    max_retries=getattr(cls, "max_retries", 3),
+                    retry_delay=getattr(cls, "retry_delay", 60),
+                    status=SpiderStatus.IDLE,
+                )
+                session.add(new_spider)
+                changed = True
+        if changed:
+            await session.commit()
+            # 重新查询
+            result = await session.execute(select(SpiderModel))
+            db_spiders = {s.name: s for s in result.scalars().all()}
+
+    # 按权限过滤
+    if not ctx.is_admin:
+        visible_names = {
+            name for name, s in db_spiders.items()
+            if s.owner_user_id == ctx.user_id or s.is_public or s.owner_user_id is None
+        }
+    else:
+        visible_names = set(db_spiders.keys())
 
     spiders = []
     for info in engine.registry.list_all():
+        if info["name"] not in visible_names:
+            continue
         db_info = db_spiders.get(info["name"])
         status_info = engine.get_spider_status(info["name"])
         spiders.append(SpiderInfo(
