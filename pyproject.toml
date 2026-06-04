@@ -21,6 +21,10 @@ dependencies = [
     "charset-normalizer>=3.0",
     "pydantic>=2.0",
     "pydantic-settings>=2.0",
+    "httpx>=0.27",
+    # 数据管道可选依赖
+    "openpyxl>=3.1",       # Excel Sink
+    "aiokafka>=0.11",      # Kafka Sink
 ]
 
 [project.optional-dependencies]
