@@ -81,6 +81,12 @@ class BaseSpider:
     primary_key: list[str] = []        # 主键字段列表，有主键则 upsert，无则追加
     sinks: list[dict] = []             # 数据输出目标，如 [{"type":"csv","path":"./data/out.csv"}]
 
+    # === 新版数据持久化 ===
+    fields: list[dict] = []            # 列定义，如 [{'name': 'title', 'type': 'VARCHAR(512)'}]
+    dedup_key: list[str] | None = None  # 去重/upsert 使用的字段列表
+    sink: str | None = None            # Sink 类型（预留）
+    sink_config: dict = {}             # Sink 配置（预留）
+
     # === 开发模式 ===
     development_mode: bool = False  # 缓存响应到磁盘，开发调试用
 
@@ -340,6 +346,10 @@ class BaseSpider:
         if key in self._env_overrides:
             return self._env_overrides[key]
         return os.environ.get(key, default)
+
+    def get_field_names(self) -> list[str]:
+        """从 self.fields 中提取字段名列表"""
+        return [f["name"] for f in self.fields]
 
     def _merge_request_kwargs(self, kwargs: dict) -> dict:
         merged = {}
