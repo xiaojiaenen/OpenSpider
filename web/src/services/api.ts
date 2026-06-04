@@ -32,12 +32,11 @@ api.interceptors.response.use(
           originalRequest.headers.Authorization = `Bearer ${data.access_token}`
           return api(originalRequest)
         } catch {
+          // refresh 失败，清除状态但不跳转（由调用方决定）
           useAuthStore.getState().logout()
-          window.location.href = '/login'
         }
       } else {
         useAuthStore.getState().logout()
-        window.location.href = '/login'
       }
     }
     return Promise.reject(error)

@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 
 class SpiderInfo(BaseModel):
     """爬虫基本信息"""
+    id: int | None = None
     name: str
     description: str = ""
     schedule: str | None = None

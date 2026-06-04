@@ -33,19 +33,25 @@ export const useAuthStore = create<AuthState>((set) => ({
     set({ accessToken: access, refreshToken: refresh, isAuthenticated: true })
   },
 
-  setUser: (user) => set({ user }),
+  setUser: (user) => {
+    localStorage.setItem('user_info', JSON.stringify(user))
+    set({ user })
+  },
 
   logout: () => {
     localStorage.removeItem('access_token')
     localStorage.removeItem('refresh_token')
+    localStorage.removeItem('user_info')
     set({ accessToken: null, refreshToken: null, user: null, isAuthenticated: false })
   },
 
   loadFromStorage: () => {
     const access = localStorage.getItem('access_token')
     const refresh = localStorage.getItem('refresh_token')
+    const userInfo = localStorage.getItem('user_info')
     if (access && refresh) {
-      set({ accessToken: access, refreshToken: refresh, isAuthenticated: true })
+      const user = userInfo ? JSON.parse(userInfo) : null
+      set({ accessToken: access, refreshToken: refresh, isAuthenticated: true, user })
     }
   },
 }))

@@ -117,6 +117,7 @@ async def list_spiders(ctx: UserContext = Depends(get_ctx)):
         db_info = db_spiders.get(info["name"])
         status_info = engine.get_spider_status(info["name"])
         spiders.append(SpiderInfo(
+            id=db_info.id if db_info else None,
             name=info["name"],
             description=info.get("description", ""),
             schedule=info.get("schedule"),
