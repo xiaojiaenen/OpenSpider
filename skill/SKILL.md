@@ -236,3 +236,54 @@ openspider validate <file.py>        # 校验文件
 - **`openspider.utils.form`** — 表单字段提取、隐藏字段收集、ASP.NET ViewState 提取
 - **`openspider.utils.url`** — jsessionid 剥离、URL 拼接和规范化
 - **`openspider.utils.selector`** — `find_by_text`、`find_by_regex`、`find_similar` 增强查找
+
+## 数据管道（Sinks）
+
+爬取数据可同时写入多个目标。在爬虫上声明 `sinks` 和 `schema`：
+
+```python
+class NewsSpider(BaseSpider):
+    name = "news"
+    schema = {"url": "string", "title": "string", "content": "text"}
+    primary_key = ["url"]  # 有主键则 upsert，无则追加
+    sinks = [
+        {"type": "csv", "path": "./data/news.csv"},
+        {"type": "excel", "path": "./data/news.xlsx"},
+        {"type": "kafka", "topic": "news_data", "bootstrap_servers": "localhost:9092"},
+        {"type": "doris", "host": "localhost", "database": "crawl", "table": "news"},
+        {"type": "json", "path": "./data/news.jsonl"},
+    ]
+```
+
+| Sink | 说明 | 自动创建 |
+|------|------|----------|
+| `csv` | CSV 文件追加写入 | 自动创建目录 |
+| `excel` | Excel 文件（需 openpyxl） | 自动创建 |
+| `json` | JSON/JSONL 文件 | 自动创建 |
+| `kafka` | Kafka topic（需 aiokafka） | `auto_create=True` 自动建 topic |
+| `doris` | Doris HTTP Stream Load | `auto_create=True` 自动建表 |
+
+不配置 sinks 则只写默认 MySQL items 表。主键类型映射：`string→VARCHAR(500)`、`text→TEXT`、`int→BIGINT`、`float→DOUBLE`、`datetime→DATETIME`。
+
+## 定时任务（Schedules）
+
+```
+GET    /schedules                 # 列出调度
+POST   /schedules                 # 创建（Body: {"spider_name":"x","cron":"0 */6 * * *","params":{}}）
+PUT    /schedules/{id}            # 修改
+DELETE /schedules/{id}            # 删除
+POST   /schedules/{id}/enable     # 启用
+POST   /schedules/{id}/disable    # 禁用
+GET    /schedules/{id}/runs       # 执行历史
+```
+
+也可在爬虫类上静态声明：`schedule = "0 */6 * * *"`。动态调度优先级高于静态。
+
+## 用户隔离
+
+平台通过 `X-User-Id` 请求头传递用户标识，OpenSpider 按用户隔离数据：
+
+- `GET /spiders` 只返回自己的爬虫
+- `POST /spiders/upload` 自动设置 owner
+- `GET /items` 只返回自己的数据
+- 管理员用 `X-Api-Key`（admin_api_key）可看所有
