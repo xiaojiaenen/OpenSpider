@@ -41,6 +41,10 @@ class SpiderRunner:
         self.errors_count = 0
         self.retry_count = 0
 
+        # SpiderDataManager 延迟初始化
+        self._data_manager = None
+        self._dm_initialized = False
+
     @property
     def is_running(self) -> bool:
         return self._task is not None and not self._task.done()
@@ -225,17 +229,69 @@ class SpiderRunner:
         from openspider.config import settings
         return settings.crawl_data_dir / self.spider.name
 
+    async def _get_or_init_data_manager(self):
+        """懒加载 SpiderDataManager（仅当 spider 定义了 fields 时使用）"""
+        if self._dm_initialized:
+            return self._data_manager
+
+        self._dm_initialized = True
+
+        # 没有 fields 定义时，不使用 DataManager
+        if not getattr(self.spider, 'fields', None) or len(self.spider.fields) == 0:
+            return None
+
+        # 从数据库查找爬虫 ID
+        from openspider.models.spider import SpiderModel
+        async with self.db_session_factory() as session:
+            result = await session.execute(
+                SpiderModel.__table__.select().where(SpiderModel.name == self.spider.name)
+            )
+            row = result.first()
+
+        if row is None:
+            logger.warning(f"未找到爬虫记录: {self.spider.name}，回退到旧模式存储")
+            return None
+
+        spider_id = row.id
+
+        from openspider.core.data_manager import SpiderDataManager
+        dm = SpiderDataManager(
+            db_session_factory=self.db_session_factory,
+            spider_id=spider_id,
+            spider_name=self.spider.name,
+            fields=self.spider.fields,
+            dedup_key=getattr(self.spider, 'dedup_key', None),
+        )
+        await dm.ensure_table()
+        self._data_manager = dm
+        return dm
+
     async def _save_item(self, item: dict) -> None:
-        from openspider.models.item import ItemModel
+        """保存数据项
+
+        如果爬虫定义了 fields，使用 SpiderDataManager 动态建表存储；
+        否则回退到旧的 ItemModel 存储（向后兼容）。
+        """
         try:
-            async with self.db_session_factory() as session:
-                session.add(ItemModel(
-                    spider_name=self.spider.name,
+            dm = await self._get_or_init_data_manager()
+            if dm is not None:
+                # 使用 SpiderDataManager 保存
+                await dm.save_item(
+                    item=item,
+                    user_id=self._user_id or "",
                     task_id=self.task_id,
-                    data=item,
-                    url=item.get("url", ""),
-                ))
-                await session.commit()
+                )
+            else:
+                # 回退到旧模式
+                from openspider.models.item import ItemModel
+                async with self.db_session_factory() as session:
+                    session.add(ItemModel(
+                        spider_name=self.spider.name,
+                        task_id=self.task_id,
+                        data=item,
+                        url=item.get("url", ""),
+                    ))
+                    await session.commit()
         except Exception as e:
             logger.error(f"保存数据失败: {e}")
 

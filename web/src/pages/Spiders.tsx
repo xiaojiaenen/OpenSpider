@@ -38,9 +38,9 @@ const SpidersPage: React.FC = () => {
 
   useEffect(() => { load() }, [])
 
-  const handleAction = async (action: string, id: number) => {
+  const handleAction = async (action: 'start' | 'stop' | 'pause' | 'resume' | 'remove', id: number) => {
     try {
-      await spiderApi[action as keyof typeof spiderApi](id)
+      await spiderApi[action](id)
       message.success(`操作成功`)
       load()
     } catch (err: any) {

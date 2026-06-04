@@ -16,7 +16,7 @@ import {
   ReloadOutlined,
   DatabaseOutlined,
   DownloadOutlined,
-  FileJsonOutlined,
+  CodeOutlined,
   FileTextOutlined,
 } from '@ant-design/icons'
 import { spiderApi, dataApi } from '../services/api'
@@ -266,7 +266,7 @@ const ItemsPage: React.FC = () => {
               {selectedSpiderId && (
                 <>
                   <Button
-                    icon={<FileJsonOutlined />}
+                    icon={<CodeOutlined />}
                     onClick={() => handleExport('json')}
                   >
                     JSON

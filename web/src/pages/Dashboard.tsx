@@ -231,10 +231,10 @@ const DashboardPage: React.FC = () => {
   ).length
   const completedTasks = tasks.filter((t) => t.status === 'completed').length
 
-  const handleQuickStart = async (spiderName: string) => {
+  const handleQuickStart = async (spiderId: number, spiderName: string) => {
     setStartingSpiders((prev) => new Set(prev).add(spiderName))
     try {
-      await spiderApi.start(spiderName)
+      await spiderApi.start(spiderId)
       message.success(`已启动: ${spiderName}`)
       await loadData()
     } catch {
@@ -517,7 +517,7 @@ const DashboardPage: React.FC = () => {
                       size="small"
                       icon={<PlayCircleOutlined />}
                       loading={startingSpiders.has(spider.name)}
-                      onClick={() => handleQuickStart(spider.name)}
+                      onClick={() => handleQuickStart(spider.id, spider.name)}
                       style={{
                         borderRadius: 6,
                         fontSize: 12,
