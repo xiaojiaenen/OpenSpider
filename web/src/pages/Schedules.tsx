@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react'
 import {
-  Table, Tag, Button, Space, Typography, message, Modal, Form, Input, Switch, Card,
-  Select, Tooltip, Empty,
+  Table, Tag, Button, Space, Typography, Modal, Form, Input, Switch, Card,
+  Select, Tooltip, Empty, App,
 } from 'antd'
 import {
   PlusOutlined, ReloadOutlined, ClockCircleOutlined, CheckCircleOutlined,
@@ -49,6 +49,7 @@ interface SpiderInfo {
 /* ── 组件 ───────────────────────────────────── */
 
 const SchedulesPage: React.FC = () => {
+  const { message } = App.useApp()
   const [schedules, setSchedules] = useState<any[]>([])
   const [spiders, setSpiders] = useState<SpiderInfo[]>([])
   const [spiderMap, setSpiderMap] = useState<Record<string, SpiderInfo>>({})

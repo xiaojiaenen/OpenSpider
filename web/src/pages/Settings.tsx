@@ -1,5 +1,5 @@
 import React, { useEffect } from 'react'
-import { Form, Input, Button, Typography, message, Card, Space, Divider } from 'antd'
+import { Form, Input, Button, Typography,  Card, Space, Divider , App } from 'antd'
 import { useAuthStore } from '../stores/auth'
 import { authApi } from '../services/api'
 
@@ -7,6 +7,7 @@ const { Title, Text } = Typography
 
 const SettingsPage: React.FC = () => {
   const { user, setUser } = useAuthStore()
+  const { message } = App.useApp()
   const [profileForm] = Form.useForm()
   const [passwordForm] = Form.useForm()
 

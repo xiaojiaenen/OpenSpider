@@ -1,5 +1,5 @@
 import React, { useState } from 'react'
-import { Form, Input, Button, Typography, message, Card, Space } from 'antd'
+import { Form, Input, Button, Typography, Card, Space, App } from 'antd'
 import { UserOutlined, LockOutlined, MailOutlined } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 import { authApi } from '../services/api'
@@ -11,6 +11,7 @@ const RegisterPage: React.FC = () => {
   const [loading, setLoading] = useState(false)
   const navigate = useNavigate()
   const { setTokens, setUser } = useAuthStore()
+  const { message } = App.useApp()
 
   const onFinish = async (values: {
     username: string

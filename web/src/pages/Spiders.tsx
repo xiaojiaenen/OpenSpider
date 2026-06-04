@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import {
-  Table, Tag, Button, Space, Typography, message, Upload, Modal, Tooltip, Card, Switch,
+  Table, Tag, Button, Space, Typography, Upload, Modal, Tooltip, Card, Switch, App,
 } from 'antd'
 import {
   PlayCircleOutlined, PauseOutlined, StopOutlined,
@@ -21,6 +21,7 @@ const statusMap: Record<string, { color: string; text: string }> = {
 }
 
 const SpidersPage: React.FC = () => {
+  const { message } = App.useApp()
   const [spiders, setSpiders] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
 

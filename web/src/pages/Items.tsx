@@ -10,7 +10,7 @@ import {
   Col,
   Tag,
   Empty,
-  message,
+  App,
 } from 'antd'
 import {
   ReloadOutlined,
@@ -26,6 +26,7 @@ const { Title, Text } = Typography
 /* ── Component ───────────────────────────────── */
 
 const ItemsPage: React.FC = () => {
+  const { message } = App.useApp()
   /* ── Spider selector ──────────────────────── */
   const [spiderOptions, setSpiderOptions] = useState<{ value: number; label: string }[]>([])
   const [selectedSpiderId, setSelectedSpiderId] = useState<number | null>(null)

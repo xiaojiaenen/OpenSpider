@@ -8,7 +8,7 @@ import {
   Typography,
   Space,
   Button,
-  message,
+  App,
   Tooltip,
   Progress,
   Empty,
@@ -198,6 +198,7 @@ const StatCard: React.FC<StatCardProps> = ({
 }
 
 const DashboardPage: React.FC = () => {
+  const { message } = App.useApp()
   const [spiders, setSpiders] = useState<any[]>([])
   const [tasks, setTasks] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
