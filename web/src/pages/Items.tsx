@@ -50,10 +50,12 @@ const ItemsPage: React.FC = () => {
       const data = await spiderApi.list()
       const list = data.spiders || data || []
       setSpiderOptions(
-        list.map((s: { id: number; name: string }) => ({
-          value: s.id,
-          label: s.name,
-        })),
+        list
+          .filter((s: { id: number | null }) => s.id != null)
+          .map((s: { id: number; name: string }) => ({
+            value: s.id,
+            label: s.name,
+          })),
       )
     } catch {
       // silent
