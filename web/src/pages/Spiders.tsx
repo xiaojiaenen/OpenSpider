@@ -1,16 +1,21 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react'
 import {
-  Table, Tag, Button, Space, Typography, Upload, Modal, Tooltip, Card, Switch, App,
+  Table, Tag, Button, Space, Typography, Upload, Modal, Tooltip, Card, Switch, App, Drawer,
 } from 'antd'
 import {
   PlayCircleOutlined, PauseOutlined, StopOutlined,
   DeleteOutlined, ReloadOutlined, CloudUploadOutlined, SyncOutlined,
-  BugOutlined, GlobalOutlined, LockOutlined,
+  BugOutlined, GlobalOutlined, LockOutlined, CodeOutlined,
 } from '@ant-design/icons'
+import hljs from 'highlight.js/lib/core'
+import python from 'highlight.js/lib/languages/python'
+import 'highlight.js/styles/github.css'
 import { spiderApi } from '../services/api'
 import type { ColumnsType } from 'antd/es/table'
 
-const { Title } = Typography
+hljs.registerLanguage('python', python)
+
+const { Title, Text } = Typography
 
 const statusMap: Record<string, { color: string; text: string }> = {
   idle: { color: 'default', text: '空闲' },
@@ -20,12 +25,46 @@ const statusMap: Record<string, { color: string; text: string }> = {
   disabled: { color: 'default', text: '已禁用' },
 }
 
+const HighlightedCode: React.FC<{ code: string }> = React.memo(({ code }) => {
+  const ref = useRef<HTMLPreElement>(null)
+  useEffect(() => {
+    if (ref.current) {
+      ref.current.innerHTML = hljs.highlight(code, { language: 'python' }).value
+    }
+  }, [code])
+  return (
+    <pre
+      ref={ref}
+      style={{
+        background: '#f6f8fa',
+        padding: 16,
+        borderRadius: 8,
+        fontSize: 13,
+        lineHeight: 1.6,
+        overflow: 'auto',
+        maxHeight: 'calc(100vh - 160px)',
+        fontFamily: 'Menlo, Monaco, "Courier New", monospace',
+        margin: 0,
+        tabSize: 4,
+      }}
+    />
+  )
+})
+
 const SpidersPage: React.FC = () => {
   const { message } = App.useApp()
   const [spiders, setSpiders] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
+  // 正在操作的爬虫 id 集合（防重复点击）
+  const [actingIds, setActingIds] = useState<Set<number>>(new Set())
+  // 正在切换可见性的 id
+  const [togglingIds, setTogglingIds] = useState<Set<number>>(new Set())
+  // 代码查看抽屉
+  const [codeDrawer, setCodeDrawer] = useState<{ open: boolean; name: string; source: string; loading: boolean }>({
+    open: false, name: '', source: '', loading: false,
+  })
 
-  const load = async () => {
+  const load = useCallback(async () => {
     setLoading(true)
     try {
       const data = await spiderApi.list()
@@ -35,26 +74,34 @@ const SpidersPage: React.FC = () => {
     } finally {
       setLoading(false)
     }
-  }
+  }, [])
 
-  useEffect(() => { load() }, [])
+  useEffect(() => { load() }, [load])
 
-  const handleAction = async (action: 'start' | 'stop' | 'pause' | 'resume' | 'remove', id: number | null) => {
+  const handleAction = useCallback(async (action: 'start' | 'stop' | 'pause' | 'resume' | 'remove', id: number | null) => {
     if (!id) {
       message.warning('爬虫未同步，请刷新后重试')
       return
     }
+    if (actingIds.has(id)) return
+    setActingIds((prev) => new Set(prev).add(id))
     try {
       await spiderApi[action](id)
-      message.success(`操作成功`)
-      load()
+      message.success('操作成功')
+      await load()
     } catch (err: any) {
       const detail = err.response?.data?.detail
       message.error(typeof detail === 'string' ? detail : '操作失败')
+    } finally {
+      setActingIds((prev) => {
+        const next = new Set(prev)
+        next.delete(id)
+        return next
+      })
     }
-  }
+  }, [actingIds, load])
 
-  const handleDelete = (id: number, name: string) => {
+  const handleDelete = useCallback((id: number, name: string) => {
     Modal.confirm({
       title: '确认删除',
       content: `确定要删除爬虫「${name}」吗？`,
@@ -64,19 +111,38 @@ const SpidersPage: React.FC = () => {
         await handleAction('remove', id)
       },
     })
-  }
+  }, [handleAction])
 
-  const handleToggleVisibility = async (id: number, isPublic: boolean) => {
+  const handleToggleVisibility = useCallback(async (id: number, isPublic: boolean) => {
+    if (togglingIds.has(id)) return
+    setTogglingIds((prev) => new Set(prev).add(id))
     try {
       await spiderApi.setVisibility(id, isPublic)
       message.success(isPublic ? '已设为公开' : '已设为私有')
-      load()
+      await load()
     } catch (err: any) {
       message.error(err.response?.data?.detail || '操作失败')
+    } finally {
+      setTogglingIds((prev) => {
+        const next = new Set(prev)
+        next.delete(id)
+        return next
+      })
     }
-  }
+  }, [togglingIds, load])
 
-  const columns: ColumnsType<any> = [
+  const handleViewCode = useCallback(async (id: number, name: string) => {
+    setCodeDrawer({ open: true, name, source: '', loading: true })
+    try {
+      const data = await spiderApi.getCode(id)
+      setCodeDrawer({ open: true, name, source: data.source || '', loading: false })
+    } catch (err: any) {
+      message.error(err.response?.data?.detail || '获取代码失败')
+      setCodeDrawer({ open: false, name: '', source: '', loading: false })
+    }
+  }, [])
+
+  const columns: ColumnsType<any> = useMemo(() => [
     {
       title: '名称',
       dataIndex: 'name',
@@ -122,6 +188,7 @@ const SpidersPage: React.FC = () => {
             checked={record.is_public}
             checkedChildren="公开"
             unCheckedChildren="私有"
+            disabled={togglingIds.has(record.id)}
             onChange={(checked) => handleToggleVisibility(record.id, checked)}
           />
         )
@@ -132,40 +199,50 @@ const SpidersPage: React.FC = () => {
       width: 200,
       render: (_: any, record: any) => {
         const running = record.is_running
+        const isPaused = record.status === 'paused'
+        const acting = actingIds.has(record.id)
         return (
           <Space size={4}>
             {running ? (
               <>
                 <Tooltip title="暂停">
-                  <Button size="small" icon={<PauseOutlined />}
+                  <Button size="small" icon={<PauseOutlined />} loading={acting}
                     onClick={() => handleAction('pause', record.id)} />
                 </Tooltip>
                 <Tooltip title="停止">
-                  <Button size="small" danger icon={<StopOutlined />}
+                  <Button size="small" danger icon={<StopOutlined />} loading={acting}
                     onClick={() => handleAction('stop', record.id)} />
                 </Tooltip>
               </>
             ) : (
               <>
                 <Tooltip title="启动">
-                  <Button size="small" type="primary" icon={<PlayCircleOutlined />}
+                  <Button size="small" type="primary" icon={<PlayCircleOutlined />} loading={acting}
                     onClick={() => handleAction('start', record.id)} />
                 </Tooltip>
-                <Tooltip title="恢复">
-                  <Button size="small" icon={<ReloadOutlined />}
-                    onClick={() => handleAction('resume', record.id)} />
-                </Tooltip>
+                {isPaused && (
+                  <Tooltip title="恢复">
+                    <Button size="small" icon={<ReloadOutlined />} loading={acting}
+                      onClick={() => handleAction('resume', record.id)} />
+                  </Tooltip>
+                )}
               </>
             )}
             <Tooltip title="删除">
-              <Button size="small" danger icon={<DeleteOutlined />}
+              <Button size="small" danger icon={<DeleteOutlined />} loading={acting}
                 onClick={() => handleDelete(record.id, record.name)} />
             </Tooltip>
+            {record.id && (
+              <Tooltip title="查看代码">
+                <Button size="small" icon={<CodeOutlined />}
+                  onClick={() => handleViewCode(record.id, record.name)} />
+              </Tooltip>
+            )}
           </Space>
         )
       },
     },
-  ]
+  ], [actingIds, togglingIds, handleAction, handleDelete, handleToggleVisibility, handleViewCode])
 
   return (
     <Card style={{ borderRadius: 8 }} styles={{ body: { padding: 24 } }}>
@@ -197,6 +274,25 @@ const SpidersPage: React.FC = () => {
         </Space>
       </div>
       <Table columns={columns} dataSource={spiders} rowKey={(r: any) => r.id ?? r.name} loading={loading} size="middle" />
+
+      <Drawer
+        title={
+          <Space>
+            <CodeOutlined />
+            <span>{codeDrawer.name}</span>
+          </Space>
+        }
+        open={codeDrawer.open}
+        onClose={() => setCodeDrawer({ open: false, name: '', source: '', loading: false })}
+        width={720}
+        destroyOnClose
+      >
+        {codeDrawer.loading ? (
+          <div style={{ textAlign: 'center', padding: 40 }}>加载中...</div>
+        ) : (
+          <HighlightedCode code={codeDrawer.source} />
+        )}
+      </Drawer>
     </Card>
   )
 }

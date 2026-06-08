@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from 'react'
+import React, { useEffect, useState, useCallback, useMemo } from 'react'
 import {
   Row,
   Col,
@@ -53,7 +53,7 @@ interface StatCardProps {
   suffix?: string
 }
 
-const StatCard: React.FC<StatCardProps> = ({
+const StatCard: React.FC<StatCardProps> = React.memo(({
   title,
   value,
   icon,
@@ -195,7 +195,15 @@ const StatCard: React.FC<StatCardProps> = ({
       </div>
     </Card>
   )
-}
+})
+
+const DASHBOARD_STYLE = (
+  <style>{`
+    .dashboard-row-alt td { background-color: #fafbfc !important; }
+    .dashboard-row-alt:hover td { background-color: #f0f5ff !important; }
+    .ant-table-row:hover td { background-color: #f0f5ff !important; }
+  `}</style>
+)
 
 const DashboardPage: React.FC = () => {
   const { message } = App.useApp()
@@ -249,7 +257,7 @@ const DashboardPage: React.FC = () => {
     }
   }
 
-  const taskColumns: ColumnsType<any> = [
+  const taskColumns: ColumnsType<any> = useMemo(() => [
     {
       title: 'ID',
       dataIndex: 'id',
@@ -277,14 +285,14 @@ const DashboardPage: React.FC = () => {
         const cfg = statusConfig[s] || statusConfig.pending
         return (
           <Tag
-            color={cfg.color}
             style={{
               borderRadius: 6,
               padding: '2px 10px',
               fontSize: 12,
-              fontWeight: 500,
-              background: cfg.bg,
-              border: `1px solid ${cfg.color}25`,
+              fontWeight: 600,
+              color: cfg.color,
+              backgroundColor: cfg.bg,
+              border: `1px solid ${cfg.color}40`,
             }}
           >
             {cfg.label || s}
@@ -315,7 +323,7 @@ const DashboardPage: React.FC = () => {
         </Text>
       ),
     },
-  ]
+  ], [])
 
   const quickStartSpiders = spiders.filter(
     (s) => !s.is_running && s.id != null
@@ -647,17 +655,7 @@ const DashboardPage: React.FC = () => {
       </Row>
 
       {/* Inject subtle CSS for alternating rows */}
-      <style>{`
-        .dashboard-row-alt td {
-          background-color: #fafbfc !important;
-        }
-        .dashboard-row-alt:hover td {
-          background-color: #f0f5ff !important;
-        }
-        .ant-table-row:hover td {
-          background-color: #f0f5ff !important;
-        }
-      `}</style>
+      {DASHBOARD_STYLE}
     </div>
   )
 }

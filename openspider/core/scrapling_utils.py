@@ -7,10 +7,18 @@ Runner 和模板爬虫（RuleSpider/SitemapRuleSpider）都需要
 
 from __future__ import annotations
 
+import os
+from pathlib import Path
+
 from scrapling.spiders import Spider
 from scrapling.fetchers import FetcherSession, AsyncStealthySession, ProxyRotator
 
 from openspider.spiders.base import BaseSpider
+
+
+def _is_docker() -> bool:
+    """检测是否运行在 Docker 容器内"""
+    return Path("/.dockerenv").exists() or os.environ.get("DOCKER_CONTAINER") == "1"
 
 
 def build_session_kwargs(spider: BaseSpider) -> dict:
@@ -28,6 +36,8 @@ def build_session_kwargs(spider: BaseSpider) -> dict:
         kwargs["cookies"] = spider.cookies
     if spider.follow_redirects is False:
         kwargs["follow_redirects"] = False
+    elif spider.allow_internal_redirects:
+        kwargs["follow_redirects"] = True
     return kwargs
 
 
@@ -56,6 +66,9 @@ def build_stealth_kwargs(spider: BaseSpider) -> dict:
         "init_script": spider.init_script,
         "capture_xhr": spider.capture_xhr,
     }
+    # Docker 容器内 Chromium 需要 --no-sandbox
+    if _is_docker():
+        kwargs["extra_flags"] = ["--no-sandbox"]
     # 页面交互钩子（浏览器自动化场景）
     if spider.page_action and callable(spider.page_action):
         kwargs["page_action"] = spider.page_action

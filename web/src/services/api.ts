@@ -15,27 +15,34 @@ api.interceptors.request.use((config) => {
   return config
 })
 
-// 响应拦截：401 自动刷新
+// ── Token 刷新互斥锁（避免多个 401 同时触发 refresh）──
+let refreshPromise: Promise<string> | null = null
+
+function doRefresh(): Promise<string> {
+  if (!refreshPromise) {
+    refreshPromise = (async () => {
+      const refreshToken = useAuthStore.getState().refreshToken
+      if (!refreshToken) throw new Error('no refresh token')
+      const { data } = await axios.post('/auth/refresh', { refresh_token: refreshToken })
+      useAuthStore.getState().setTokens(data.access_token, data.refresh_token)
+      return data.access_token as string
+    })().finally(() => { refreshPromise = null })
+  }
+  return refreshPromise
+}
+
+// 响应拦截：401 自动刷新（共享同一次 refresh 请求）
 api.interceptors.response.use(
   (res) => res,
   async (error) => {
     const originalRequest = error.config
     if (error.response?.status === 401 && !originalRequest._retry) {
       originalRequest._retry = true
-      const refreshToken = useAuthStore.getState().refreshToken
-      if (refreshToken) {
-        try {
-          const { data } = await axios.post('/auth/refresh', {
-            refresh_token: refreshToken,
-          })
-          useAuthStore.getState().setTokens(data.access_token, data.refresh_token)
-          originalRequest.headers.Authorization = `Bearer ${data.access_token}`
-          return api(originalRequest)
-        } catch {
-          // refresh 失败，清除状态但不跳转（由调用方决定）
-          useAuthStore.getState().logout()
-        }
-      } else {
+      try {
+        const newToken = await doRefresh()
+        originalRequest.headers.Authorization = `Bearer ${newToken}`
+        return api(originalRequest)
+      } catch {
         useAuthStore.getState().logout()
       }
     }
@@ -77,6 +84,7 @@ export const spiderApi = {
   pause: (id: number) => api.post(`/spiders/${id}/pause`).then((r) => r.data),
   resume: (id: number) => api.post(`/spiders/${id}/resume`).then((r) => r.data),
   remove: (id: number) => api.delete(`/spiders/${id}`).then((r) => r.data),
+  getCode: (id: number) => api.get(`/spiders/${id}/code`).then((r) => r.data),
   setVisibility: (id: number, isPublic: boolean) =>
     api.put(`/spiders/${id}/visibility`, { is_public: isPublic }).then((r) => r.data),
   upload: (file: File) => {
@@ -103,6 +111,8 @@ export const dataApi = {
     api.get(`/spiders/${spiderId}/data`, { params }).then((r) => r.data),
   export: (spiderId: number, format = 'json', limit = 10000) =>
     api.get(`/spiders/${spiderId}/export`, { params: { format, limit } }).then((r) => r.data),
+  exportRaw: (spiderId: number, format = 'csv', limit = 10000) =>
+    api.get(`/spiders/${spiderId}/export`, { params: { format, limit }, responseType: 'text' }),
   fields: (spiderId: number) =>
     api.get(`/spiders/${spiderId}/fields`).then((r) => r.data),
 }

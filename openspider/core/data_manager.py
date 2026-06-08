@@ -146,7 +146,7 @@ class SpiderDataManager:
         - dedup_key → 创建唯一索引
         """
         async with self.db_session_factory() as session:
-            conn = await session.get_bind()
+            conn = session.get_bind()
             is_sqlite = self._is_sqlite(conn)
 
             if is_sqlite:
@@ -211,15 +211,15 @@ class SpiderDataManager:
 
     async def _create_table(self, session: AsyncSession) -> None:
         """创建完整的数据表"""
-        conn = await session.get_bind()
+        conn = session.get_bind()
         is_sqlite = self._is_sqlite(conn)
 
         columns = []
         for col_name, col_type in self.STANDARD_COLUMNS:
             if is_sqlite:
-                columns.append(f"{col_name} {col_type}")
+                columns.append(f"`{col_name}` {col_type}")
             else:
-                columns.append(f"{col_name} {self._col_type_mysql(col_type)}")
+                columns.append(f"`{col_name}` {self._col_type_mysql(col_type)}")
 
         # 自定义字段
         for field in self.fields:
@@ -229,7 +229,7 @@ class SpiderDataManager:
                 ftype = self._col_type_mysql(ftype)
             # 防止自定义字段覆盖标准列
             if name not in self.STANDARD_COLUMN_NAMES:
-                columns.append(f"{name} {ftype}")
+                columns.append(f"`{name}` {ftype}")
 
         create_sql = f"CREATE TABLE {self.table_name} (\n  " + ",\n  ".join(columns) + "\n)"
         await session.execute(text(create_sql))
@@ -255,7 +255,7 @@ class SpiderDataManager:
             ftype = _validate_column_type(field.get("type", "VARCHAR(512)"))
             if name not in existing_cols and name not in self.STANDARD_COLUMN_NAMES:
                 await session.execute(
-                    text(f"ALTER TABLE {self.table_name} ADD COLUMN {name} {ftype}")
+                    text(f"ALTER TABLE {self.table_name} ADD COLUMN `{name}` {ftype}")
                 )
                 logger.info(f"补充列: {self.table_name}.{name}")
 
@@ -274,7 +274,7 @@ class SpiderDataManager:
             ftype_mysql = self._col_type_mysql(ftype)
             if name not in existing_cols and name not in self.STANDARD_COLUMN_NAMES:
                 await session.execute(
-                    text(f"ALTER TABLE {self.table_name} ADD COLUMN {name} {ftype_mysql}")
+                    text(f"ALTER TABLE {self.table_name} ADD COLUMN `{name}` {ftype_mysql}")
                 )
                 logger.info(f"补充列: {self.table_name}.{name}")
 
@@ -320,7 +320,7 @@ class SpiderDataManager:
     async def _insert(self, params: dict) -> None:
         """普通 INSERT"""
         async with self.db_session_factory() as session:
-            conn = await session.get_bind()
+            conn = session.get_bind()
             is_sqlite = self._is_sqlite(conn)
 
             # 不插入 id（自增）和 crawled_at（默认值）
@@ -328,7 +328,7 @@ class SpiderDataManager:
             # 校验所有列名
             for k in cols:
                 _validate_identifier(k, "列名")
-            col_names = ", ".join(cols.keys())
+            col_names = ", ".join(f"`{k}`" for k in cols.keys())
             placeholders = ", ".join([f":{k}" for k in cols.keys()])
 
             sql = f"INSERT INTO {self.table_name} ({col_names}) VALUES ({placeholders})"
@@ -338,7 +338,7 @@ class SpiderDataManager:
     async def _upsert(self, params: dict) -> None:
         """UPSERT: INSERT ... ON CONFLICT DO UPDATE"""
         async with self.db_session_factory() as session:
-            conn = await session.get_bind()
+            conn = session.get_bind()
             is_sqlite = self._is_sqlite(conn)
 
             # 不插入 id 和 crawled_at
@@ -348,17 +348,17 @@ class SpiderDataManager:
                 _validate_identifier(k, "列名")
             for k in (self.dedup_key or []):
                 _validate_identifier(k, "去重键")
-            col_names = ", ".join(cols.keys())
+            col_names = ", ".join(f"`{k}`" for k in cols.keys())
             placeholders = ", ".join([f":{k}" for k in cols.keys()])
 
             # ON CONFLICT 列（dedup_key）
-            conflict_cols = ", ".join(self.dedup_key)
+            conflict_cols = ", ".join(f"`{k}`" for k in self.dedup_key)
 
             # SET 子句：排除 dedup_key 和 user_id/task_id（这些不更新）
             update_parts = []
             for k in cols.keys():
                 if k not in self.dedup_key:
-                    update_parts.append(f"{k} = :{k}")
+                    update_parts.append(f"`{k}` = :{k}")
             set_clause = ", ".join(update_parts)
 
             if is_sqlite:

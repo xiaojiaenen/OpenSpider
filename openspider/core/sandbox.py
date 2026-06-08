@@ -16,10 +16,10 @@ from loguru import logger
 # ── 配置 ──────────────────────────────────────────────────
 
 BLOCKED_MODULES = frozenset({
-    "os", "sys", "subprocess", "shutil", "socket", "ctypes",
+    "subprocess", "shutil", "socket", "ctypes",
     "importlib", "signal", "multiprocessing", "pty", "pickle",
     "shelve", "dbm", "code", "codeop", "compileall",
-    "webbrowser", "platform", "pdb", "profile", "cProfile",
+    "webbrowser", "pdb", "profile", "cProfile",
     "trace", "traceback", "inspect", "gc", "faulthandler",
 })
 

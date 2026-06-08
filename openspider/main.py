@@ -19,11 +19,9 @@ from openspider.core.engine import Engine
 if not settings.jwt_secret_key:
     import warnings
     warnings.warn(
-        "jwt_secret_key 未设置！请在 .env 或环境变量中配置。"
-        "未设置时使用不安全的默认值，仅限开发环境。",
+        "jwt_secret_key 未设置！请在 .env 或环境变量中配置。",
         stacklevel=1,
     )
-    # 开发环境自动填充一个不安全的默认值
     settings.jwt_secret_key = "dev-insecure-key-change-me-in-production"
 
 # 配置 loguru
@@ -47,12 +45,12 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="OpenSpider",
-    description="爬虫管理平台 — 管理多个爬虫的生命周期，暴露标准化 API 供外部 AI 集成",
+    description="爬虫管理平台",
     version="0.2.0",
     lifespan=lifespan,
 )
 
-# CORS（开发模式允许前端 dev server）
+# CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
@@ -61,7 +59,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 注册路由和错误处理
+# 注册路由
 from openspider.api.routes import router, public_router, set_engine
 from openspider.api.auth_routes import auth_router
 from openspider.api.schedule_routes import schedule_router
@@ -69,15 +67,15 @@ from openspider.api.error_handler import register_error_handlers
 from openspider.api.websocket import ws_router
 
 set_engine(engine)
-app.include_router(public_router)  # 不需要认证的接口
-app.include_router(auth_router)    # 认证（/auth/*）
-app.include_router(router)         # 需要认证的接口
-app.include_router(schedule_router)  # 调度管理
-app.include_router(ws_router)      # WebSocket
+app.include_router(public_router)
+app.include_router(auth_router)
+app.include_router(router)
+app.include_router(schedule_router)
+app.include_router(ws_router)
 register_error_handlers(app)
 
-# 前端静态文件（React 构建产物）
-_frontend_dir = settings.frontend_dir if hasattr(settings, 'frontend_dir') else Path("./web/dist")
+# 前端静态文件
+_frontend_dir = settings.frontend_dir if hasattr(settings, "frontend_dir") else Path("./web/dist")
 if _frontend_dir.exists():
     app.mount("/", StaticFiles(directory=str(_frontend_dir), html=True), name="frontend")
 

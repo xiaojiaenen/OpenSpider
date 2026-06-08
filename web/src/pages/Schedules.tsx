@@ -1,11 +1,11 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useState, useCallback, useMemo } from 'react'
 import {
   Table, Tag, Button, Space, Typography, Modal, Form, Input, Switch, Card,
   Select, Tooltip, Empty, App,
 } from 'antd'
 import {
   PlusOutlined, ReloadOutlined, ClockCircleOutlined, CheckCircleOutlined,
-  PauseCircleOutlined, DeleteOutlined, EditOutlined, BugOutlined,
+  PauseCircleOutlined, DeleteOutlined, BugOutlined,
 } from '@ant-design/icons'
 import { scheduleApi, spiderApi } from '../services/api'
 import type { ColumnsType } from 'antd/es/table'
@@ -35,10 +35,6 @@ const CRON_LABEL_MAP: Record<string, string> = Object.fromEntries(
   CRON_PRESETS.map((p) => [p.value, p.label]),
 )
 
-function cronToPreset(cron: string): string {
-  return CRON_LABEL_MAP[cron] ? cron : '__custom__'
-}
-
 /* ── Spider 信息 ────────────────────────────── */
 
 interface SpiderInfo {
@@ -56,13 +52,16 @@ const SchedulesPage: React.FC = () => {
   const [loading, setLoading] = useState(true)
   const [spidersLoading, setSpidersLoading] = useState(false)
   const [modalOpen, setModalOpen] = useState(false)
+  const [creating, setCreating] = useState(false)
+  // 正在切换的调度 id
+  const [togglingIds, setTogglingIds] = useState<Set<number>>(new Set())
   const [form] = Form.useForm()
 
   const cronPreset = Form.useWatch('cronPreset', form)
 
   /* ── 数据加载 ───────────────────────────── */
 
-  const loadSchedules = async () => {
+  const loadSchedules = useCallback(async () => {
     setLoading(true)
     try {
       const data = await scheduleApi.list()
@@ -72,9 +71,9 @@ const SchedulesPage: React.FC = () => {
     } finally {
       setLoading(false)
     }
-  }
+  }, [])
 
-  const loadSpiders = async () => {
+  const loadSpiders = useCallback(async () => {
     setSpidersLoading(true)
     try {
       const data = await spiderApi.list()
@@ -88,16 +87,18 @@ const SchedulesPage: React.FC = () => {
     } finally {
       setSpidersLoading(false)
     }
-  }
+  }, [])
 
   useEffect(() => {
     loadSchedules()
     loadSpiders()
-  }, [])
+  }, [loadSchedules, loadSpiders])
 
   /* ── 操作 ────────────────────────────────── */
 
-  const handleToggle = async (record: any) => {
+  const handleToggle = useCallback(async (record: any) => {
+    if (togglingIds.has(record.id)) return
+    setTogglingIds((prev) => new Set(prev).add(record.id))
     try {
       if (record.status === 'enabled') {
         await scheduleApi.disable(record.id)
@@ -105,13 +106,19 @@ const SchedulesPage: React.FC = () => {
         await scheduleApi.enable(record.id)
       }
       message.success('操作成功')
-      loadSchedules()
+      await loadSchedules()
     } catch (err: any) {
       message.error(err.response?.data?.detail || '操作失败')
+    } finally {
+      setTogglingIds((prev) => {
+        const next = new Set(prev)
+        next.delete(record.id)
+        return next
+      })
     }
-  }
+  }, [togglingIds, loadSchedules])
 
-  const handleDelete = (id: number) => {
+  const handleDelete = useCallback((id: number) => {
     Modal.confirm({
       title: '确认删除此调度？',
       content: '删除后不可恢复，请谨慎操作。',
@@ -124,9 +131,9 @@ const SchedulesPage: React.FC = () => {
         loadSchedules()
       },
     })
-  }
+  }, [loadSchedules])
 
-  const handleCreate = async (values: any) => {
+  const handleCreate = useCallback(async (values: any) => {
     const cron = values.cronPreset === '__custom__'
       ? values.customCron
       : values.cronPreset
@@ -136,6 +143,7 @@ const SchedulesPage: React.FC = () => {
       return
     }
 
+    setCreating(true)
     try {
       await scheduleApi.create({
         spider_name: values.spider_name,
@@ -147,12 +155,14 @@ const SchedulesPage: React.FC = () => {
       loadSchedules()
     } catch (err: any) {
       message.error(err.response?.data?.detail || '创建失败')
+    } finally {
+      setCreating(false)
     }
-  }
+  }, [loadSchedules])
 
   /* ── 表格列定义 ──────────────────────────── */
 
-  const columns: ColumnsType<any> = [
+  const columns: ColumnsType<any> = useMemo(() => [
     {
       title: 'ID',
       dataIndex: 'id',
@@ -239,6 +249,7 @@ const SchedulesPage: React.FC = () => {
           <Tooltip title={record.status === 'enabled' ? '暂停' : '启用'}>
             <Switch
               checked={record.status === 'enabled'}
+              disabled={togglingIds.has(record.id)}
               onChange={() => handleToggle(record)}
               size="small"
               checkedChildren="启"
@@ -257,7 +268,7 @@ const SchedulesPage: React.FC = () => {
         </Space>
       ),
     },
-  ]
+  ], [spiderMap, togglingIds, handleToggle, handleDelete])
 
   /* ── 渲染 ─────────────────────────────────── */
 
@@ -331,7 +342,8 @@ const SchedulesPage: React.FC = () => {
         onOk={() => form.submit()}
         okText="创建"
         cancelText="取消"
-        destroyOnClose
+        confirmLoading={creating}
+        destroyOnHidden
         width={480}
       >
         <Form

@@ -8,7 +8,13 @@ from pydantic_settings import BaseSettings
 class Settings(BaseSettings):
     """OpenSpider 全局配置，从环境变量或 .env 文件读取"""
 
-    # MySQL
+    # 数据库类型: sqlite 或 mysql
+    db_type: str = "sqlite"
+
+    # SQLite 配置
+    sqlite_path: str = "./data/openspider.db"
+
+    # MySQL 配置（db_type=mysql 时生效）
     mysql_host: str = "localhost"
     mysql_port: int = 3306
     mysql_user: str = "root"
@@ -32,7 +38,7 @@ class Settings(BaseSettings):
     log_file: Path = Path("./logs/openspider.log")
 
     # 认证
-    jwt_secret_key: str = ""          # 必填，否则启动报错
+    jwt_secret_key: str = ""
     jwt_algorithm: str = "HS256"
     jwt_access_expire_minutes: int = 30
     jwt_refresh_expire_days: int = 7
@@ -46,9 +52,9 @@ class Settings(BaseSettings):
 
     @property
     def database_url(self) -> str:
-        """异步数据库连接 URL（MySQL 或 SQLite）"""
-        if self.mysql_host == "sqlite":
-            return "sqlite+aiosqlite:///./openspider.db"
+        """异步数据库连接 URL"""
+        if self.db_type == "sqlite":
+            return f"sqlite+aiosqlite:///{self.sqlite_path}"
         return (
             f"mysql+aiomysql://{self.mysql_user}:{self.mysql_password}"
             f"@{self.mysql_host}:{self.mysql_port}/{self.mysql_database}"
@@ -58,8 +64,8 @@ class Settings(BaseSettings):
     @property
     def sync_database_url(self) -> str:
         """同步数据库连接 URL（用于 Alembic 迁移）"""
-        if self.mysql_host == "sqlite":
-            return "sqlite:///./openspider.db"
+        if self.db_type == "sqlite":
+            return f"sqlite:///{self.sqlite_path}"
         return (
             f"mysql+pymysql://{self.mysql_user}:{self.mysql_password}"
             f"@{self.mysql_host}:{self.mysql_port}/{self.mysql_database}"

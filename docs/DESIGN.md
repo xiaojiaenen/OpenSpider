@@ -1,4 +1,4 @@
-# OpenSpider 设计方案
+﻿# OpenSpider 设计方案
 
 ## 项目定位
 
@@ -1034,3 +1034,4 @@ AI 侧需要的 Skill 描述见 `skill/SKILL.md`，包含完整的接口文档�
 - 多节点状态协调
 - executor_node 路由
 - CDP 远程浏览器共享
+

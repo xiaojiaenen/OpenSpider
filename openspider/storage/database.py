@@ -1,4 +1,4 @@
-"""MySQL 数据库连接与会话管理"""
+"""数据库连接与会话管理"""
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase

@@ -83,12 +83,13 @@ class SpiderRunner:
         if self._task and not self._task.done():
             try:
                 await asyncio.wait_for(self._task, timeout=timeout)
-            except asyncio.TimeoutError:
-                logger.warning(f"爬虫 {self.spider_name} 超时未退出，强制取消")
-                self._task.cancel()
+            except (asyncio.TimeoutError, asyncio.CancelledError):
+                if not self._task.done():
+                    logger.warning(f"爬虫 {self.spider_name} 超时未退出，强制取消")
+                    self._task.cancel()
                 try:
                     await self._task
-                except asyncio.CancelledError:
+                except (asyncio.CancelledError, Exception):
                     pass
 
     async def _log(self, level: LogLevel, message: str) -> None:
@@ -253,7 +254,7 @@ class SpiderRunner:
                     requests_made=self.requests_made,
                     errors_count=self.errors_count,
                     error_message=error_message,
-                    finished_at=datetime.now(timezone.utc) if status in (TaskStatus.COMPLETED, TaskStatus.FAILED) else None,
+                    finished_at=datetime.now() if status in (TaskStatus.COMPLETED, TaskStatus.FAILED) else None,
                 )
             )
             await session.commit()

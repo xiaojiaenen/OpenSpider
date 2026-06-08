@@ -90,10 +90,12 @@ class Engine:
             raise ValueError(f"爬虫 {name} 对应的文件不存在")
 
         # 创建任务记录
+        from datetime import datetime
         async with async_session() as session:
             task = TaskModel(
                 spider_name=name,
                 status=TaskStatus.RUNNING,
+                started_at=datetime.now(),
                 params=params or {},
                 owner_user_id=user_id,
             )

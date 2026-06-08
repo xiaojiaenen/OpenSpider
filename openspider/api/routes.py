@@ -365,6 +365,43 @@ async def upload_spider(file: UploadFile = File(...),
         raise HTTPException(status_code=400, detail=str(e))
 
 
+@router.get("/spiders/{spider_id}/code")
+async def get_spider_code(spider_id: int, ctx: UserContext = Depends(get_ctx)):
+    """获取爬虫源代码"""
+    db_spider = await _get_spider_from_db(spider_id)
+
+    # 权限检查
+    is_owner = db_spider.owner_user_id == ctx.user_id
+    if not is_owner and not db_spider.is_public and not ctx.is_admin:
+        raise HTTPException(status_code=403, detail="无权查看该爬虫代码")
+
+    engine = get_engine()
+
+    # 优先从 registry 的 file_map 获取路径
+    file_path = engine.registry.get_file_path(db_spider.name)
+
+    # fallback: 从数据库 file_path 或 spiders_dir 拼接
+    if file_path is None:
+        if db_spider.file_path:
+            file_path = Path(db_spider.file_path)
+        else:
+            file_path = settings.spiders_dir / f"{db_spider.name}.py"
+
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="爬虫文件不存在")
+
+    try:
+        source = file_path.read_text(encoding="utf-8")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"读取文件失败: {e}")
+
+    return {
+        "name": db_spider.name,
+        "file_path": str(file_path),
+        "source": source,
+    }
+
+
 # === 任务查询 ===
 
 @router.get("/tasks", response_model=TaskListResponse)
@@ -410,6 +447,7 @@ async def list_tasks(
                 id=t.id,
                 spider_name=t.spider_name,
                 status=t.status.value if hasattr(t.status, 'value') else t.status,
+                created_at=t.created_at,
                 started_at=t.started_at,
                 finished_at=t.finished_at,
                 items_scraped=t.items_scraped,
@@ -439,6 +477,7 @@ async def get_task(task_id: int):
         id=task.id,
         spider_name=task.spider_name,
         status=task.status.value if hasattr(task.status, 'value') else task.status,
+        created_at=task.created_at,
         started_at=task.started_at,
         finished_at=task.finished_at,
         items_scraped=task.items_scraped,

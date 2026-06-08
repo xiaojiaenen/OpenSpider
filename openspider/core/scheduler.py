@@ -145,7 +145,7 @@ class SpiderScheduler:
                         update(ScheduleModel)
                         .where(ScheduleModel.id == schedule_id)
                         .values(
-                            last_run=datetime.utcnow(),
+                            last_run=datetime.now(),
                             last_status="triggered",
                             run_count=ScheduleModel.run_count + 1,
                         )

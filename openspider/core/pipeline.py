@@ -22,12 +22,7 @@ class Pipeline:
         self._sinks: list[BaseSink] = []
 
     def add_sink(self, sink_config: dict):
-        """添加一个 Sink
-
-        Args:
-            sink_config: Sink 配置，必须包含 type 字段
-                示例: {"type": "csv", "path": "./data/out.csv"}
-        """
+        """添加一个 Sink"""
         sink_type = sink_config.get("type")
         if not sink_type:
             raise ValueError("sink_config 必须包含 type 字段")
@@ -36,7 +31,6 @@ class Pipeline:
         if sink_cls is None:
             raise ValueError(f"未知的 sink 类型: {sink_type}")
 
-        # 注入平台信息
         config = {**sink_config}
         config.setdefault("spider_name", self.spider_name)
         config.setdefault("user_id", self.user_id or "")
@@ -80,10 +74,13 @@ class Pipeline:
                 logger.error(f"Pipeline: flush 失败 ({sink.__class__.__name__}): {e}")
 
     @classmethod
-    def from_spider(cls, spider, user_id: str | None = None) -> "Pipeline":
+    def from_spider(cls, spider, user_id: str | None = None,
+                    db_session_factory=None, spider_id: int = 0,
+                    task_id: int = 0) -> "Pipeline":
         """从爬虫实例创建 Pipeline
 
-        读取 spider 的 sinks、schema、primary_key 属性。
+        如果用户配置了 sinks，只使用用户配置的 sinks；
+        否则如果定义了 fields，自动添加 DatabaseSink 作为默认存储。
         """
         pipeline = cls(
             spider_name=spider.name,
@@ -92,12 +89,31 @@ class Pipeline:
             schema=getattr(spider, "schema", None),
         )
 
-        sinks_config = getattr(spider, "sinks", [])
-        for sink_config in sinks_config:
-            try:
-                pipeline.add_sink(sink_config)
-            except Exception as e:
-                logger.error(f"Pipeline: 添加 sink 失败: {e}")
+        user_sinks = getattr(spider, "sinks", [])
+
+        if user_sinks:
+            # 用户配置了 sinks → 只使用用户配置的 sinks
+            for sink_config in user_sinks:
+                try:
+                    pipeline.add_sink(sink_config)
+                except Exception as e:
+                    logger.error(f"Pipeline: 添加 sink 失败: {e}")
+        else:
+            # 未配置 sinks → 使用默认 DatabaseSink
+            fields = getattr(spider, "fields", [])
+            if fields and db_session_factory and spider_id:
+                from openspider.core.sinks.database_sink import DatabaseSink
+                db_sink = DatabaseSink({
+                    "spider_name": spider.name,
+                    "user_id": user_id or "",
+                    "db_session_factory": db_session_factory,
+                    "spider_id": spider_id,
+                    "task_id": task_id,
+                    "fields": fields,
+                    "dedup_key": getattr(spider, "dedup_key", None),
+                })
+                pipeline._sinks.append(db_sink)
+                logger.info(f"Pipeline: 自动添加 DatabaseSink -> {db_sink.table_name}")
 
         return pipeline
 

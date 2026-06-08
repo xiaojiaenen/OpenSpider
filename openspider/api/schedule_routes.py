@@ -81,8 +81,8 @@ async def list_schedules(ctx: UserContext = Depends(get_ctx)):
 @schedule_router.post("", response_model=ScheduleInfo)
 async def create_schedule(body: ScheduleCreate, ctx: UserContext = Depends(get_ctx)):
     """创建调度"""
-    from openspider.core.engine import _engine
-    engine = _engine
+    from openspider.api.routes import get_engine
+    engine = get_engine()
     if engine is None:
         raise HTTPException(status_code=503, detail="引擎未初始化")
 
@@ -161,7 +161,8 @@ async def update_schedule(schedule_id: int, body: ScheduleUpdate,
         await session.refresh(schedule)
 
     # 更新调度器
-    from openspider.core.engine import _engine
+    from openspider.api.routes import get_engine
+    _engine = get_engine()
     if _engine and _engine.scheduler:
         _engine.scheduler.add_schedule(schedule.spider_name, schedule.cron, schedule_id=schedule.id)
 
@@ -191,7 +192,8 @@ async def delete_schedule(schedule_id: int, ctx: UserContext = Depends(get_ctx))
         await session.commit()
 
     # 从调度器移除
-    from openspider.core.engine import _engine
+    from openspider.api.routes import get_engine
+    _engine = get_engine()
     if _engine and _engine.scheduler:
         _engine.scheduler.remove_schedule(spider_name)
 
@@ -213,7 +215,8 @@ async def enable_schedule(schedule_id: int, ctx: UserContext = Depends(get_ctx))
         schedule.next_run = _calculate_next_run(schedule.cron)
         await session.commit()
 
-    from openspider.core.engine import _engine
+    from openspider.api.routes import get_engine
+    _engine = get_engine()
     if _engine and _engine.scheduler:
         _engine.scheduler.add_schedule(schedule.spider_name, schedule.cron, schedule_id=schedule.id)
 
@@ -235,7 +238,8 @@ async def disable_schedule(schedule_id: int, ctx: UserContext = Depends(get_ctx)
         schedule.next_run = None
         await session.commit()
 
-    from openspider.core.engine import _engine
+    from openspider.api.routes import get_engine
+    _engine = get_engine()
     if _engine and _engine.scheduler:
         _engine.scheduler.remove_schedule(schedule.spider_name)
 

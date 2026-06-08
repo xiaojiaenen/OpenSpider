@@ -1,4 +1,4 @@
-"""Registry 注册表测试"""
+"""Registry 注册表测�?""
 
 import pytest
 from pathlib import Path
@@ -8,7 +8,7 @@ from openspider.spiders.base import BaseSpider
 
 @pytest.fixture
 def registry(tmp_path):
-    """创建临时注册表"""
+    """创建临时注册�?""
     return SpiderRegistry(tmp_path)
 
 
@@ -46,7 +46,7 @@ def test_registry_scan(registry, sample_spider_file):
 
 
 def test_registry_get(registry, sample_spider_file):
-    """按名称获取爬虫"""
+    """按名称获取爬�?""
     registry.scan_directory()
     cls = registry.get("test")
     assert cls is not None
@@ -59,7 +59,7 @@ def test_registry_get_not_found(registry):
 
 
 def test_registry_list_all(registry, sample_spider_file):
-    """列出所有爬虫"""
+    """列出所有爬�?""
     registry.scan_directory()
     result = registry.list_all()
     assert len(result) == 1
@@ -75,7 +75,7 @@ def test_registry_unregister(registry, sample_spider_file):
 
 
 def test_registry_invalid_syntax(tmp_path):
-    """语法错误的文件"""
+    """语法错误的文�?""
     spider_dir = tmp_path / "spiders"
     spider_dir.mkdir()
     bad_file = spider_dir / "bad.py"
@@ -87,7 +87,7 @@ def test_registry_invalid_syntax(tmp_path):
 
 
 def test_registry_not_base_spider(tmp_path):
-    """不继承 BaseSpider 的类"""
+    """不继�?BaseSpider 的类"""
     spider_dir = tmp_path / "spiders"
     spider_dir.mkdir()
     bad_file = spider_dir / "bad.py"
@@ -112,3 +112,5 @@ def test_registry_validate_syntax_fail(registry, tmp_path):
     bad_file.write_text("def broken(")
     with pytest.raises(ValueError, match="语法错误"):
         registry._validate_syntax(bad_file)
+
+

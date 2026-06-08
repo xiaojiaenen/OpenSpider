@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from 'react'
+import React, { useEffect, useState, useCallback, useMemo } from 'react'
 import {
   Card,
   Table,
@@ -148,8 +148,13 @@ const ItemsPage: React.FC = () => {
     async (format: 'json' | 'csv') => {
       if (!selectedSpiderId) return
       try {
-        const data = await dataApi.export(selectedSpiderId, format)
         if (format === 'json') {
+          const data = await dataApi.export(selectedSpiderId, format)
+          const items = data.data || data
+          if (!items || (Array.isArray(items) && items.length === 0)) {
+            message.warning('没有可导出的数据')
+            return
+          }
           const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
           const url = URL.createObjectURL(blob)
           const a = document.createElement('a')
@@ -158,29 +163,13 @@ const ItemsPage: React.FC = () => {
           a.click()
           URL.revokeObjectURL(url)
         } else {
-          // CSV export: flatten items into rows
-          const itemsArr = data.items || data
-          if (!Array.isArray(itemsArr) || itemsArr.length === 0) {
+          // CSV: 后端直接返回 CSV 流，直接下载
+          const response = await dataApi.exportRaw(selectedSpiderId, format)
+          if (!response.data || response.data.length === 0) {
             message.warning('没有可导出的数据')
             return
           }
-          const headers = columns
-          const csvRows = [headers.join(',')]
-          for (const row of itemsArr) {
-            const vals = headers.map((h) => {
-              const v = row[h]
-              const str = v === null || v === undefined ? '' : String(v)
-              // Escape CSV: wrap in quotes if contains comma/newline/quote
-              if (str.includes(',') || str.includes('\n') || str.includes('"')) {
-                return `"${str.replace(/"/g, '""')}"`
-              }
-              return str
-            })
-            csvRows.push(vals.join(','))
-          }
-          const blob = new Blob(['﻿' + csvRows.join('\n')], {
-            type: 'text/csv;charset=utf-8',
-          })
+          const blob = new Blob([response.data], { type: 'text/csv;charset=utf-8' })
           const url = URL.createObjectURL(blob)
           const a = document.createElement('a')
           a.href = url
@@ -193,12 +182,12 @@ const ItemsPage: React.FC = () => {
         message.error('导出失败')
       }
     },
-    [selectedSpiderId, columns],
+    [selectedSpiderId],
   )
 
   /* ── Table columns ────────────────────────── */
 
-  const tableColumns = columns.map((col) => {
+  const tableColumns = useMemo(() => columns.map((col) => {
     const meta = fieldMap[col]
     const label = meta?.label || col
     const isTime = col === 'crawled_at' || meta?.type === 'datetime'
@@ -230,7 +219,7 @@ const ItemsPage: React.FC = () => {
         return <Text ellipsis style={{ fontSize: 13 }}>{String(value)}</Text>
       },
     }
-  })
+  }), [columns, fieldMap])
 
   /* ── JSX ────────────────────────────────────── */
 

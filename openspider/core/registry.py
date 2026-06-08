@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import importlib
 import sys
 from pathlib import Path
@@ -10,6 +11,31 @@ from loguru import logger
 
 from openspider.core.sandbox import validate_source
 from openspider.spiders.base import BaseSpider
+
+# 危险模块和函数黑名单
+BLOCKED_MODULES = {
+    "subprocess", "shlex", "ctypes", "multiprocessing",
+    "socket", "http.server", "xmlrpc", "ftplib", "smtplib",
+    "telnetlib", "pickle", "shelve", "marshal",
+    "code", "codeop", "compile",  # compile is a builtin
+    "importlib", "pkgutil",
+}
+
+BLOCKED_BUILTINS = {
+    "eval", "exec", "compile", "__import__", "globals", "locals",
+    "breakpoint", "exit", "quit",
+}
+
+BLOCKED_ATTRS = {
+    "os.system", "os.popen", "os.exec", "os.spawn",
+    "subprocess.Popen", "subprocess.call", "subprocess.run", "subprocess.check_output",
+    "shutil.rmtree", "shutil.copytree",
+}
+
+
+class SecurityError(ValueError):
+    """安全检查失败"""
+    pass
 
 
 class SpiderRegistry:
@@ -86,12 +112,71 @@ class SpiderRegistry:
         return [n for n in self._file_map.values() if self._file_map.get(str(file_path)) == n]
 
     def _validate_syntax(self, file_path: Path) -> None:
-        """校验 Python 文件语法"""
+        """校验 Python 文件语法 + 安全检查"""
         source = file_path.read_text(encoding="utf-8")
         try:
             compile(source, str(file_path), "exec")
         except SyntaxError as e:
             raise ValueError(f"语法错误: {e}") from e
+        self._check_security(source, str(file_path))
+
+    def _check_security(self, source: str, filename: str = "<string>") -> None:
+        """AST 静态分析，拦截危险代码模式"""
+        try:
+            tree = ast.parse(source, filename=filename)
+        except SyntaxError:
+            return  # 语法错误已在上一步处理
+
+        for node in ast.walk(tree):
+            # 检查 import 语句
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    mod = alias.name.split(".")[0]
+                    if mod in BLOCKED_MODULES:
+                        raise SecurityError(
+                            f"禁止导入模块: {alias.name} (第 {node.lineno} 行)"
+                        )
+
+            # 检查 from ... import 语句
+            elif isinstance(node, ast.ImportFrom):
+                if node.module:
+                    mod = node.module.split(".")[0]
+                    if mod in BLOCKED_MODULES:
+                        raise SecurityError(
+                            f"禁止导入模块: {node.module} (第 {node.lineno} 行)"
+                        )
+
+            # 检查函数调用
+            elif isinstance(node, ast.Call):
+                # eval(), exec(), __import__() 等
+                if isinstance(node.func, ast.Name):
+                    if node.func.id in BLOCKED_BUILTINS:
+                        raise SecurityError(
+                            f"禁止调用: {node.func.id}() (第 {node.lineno} 行)"
+                        )
+
+                # os.system(), subprocess.run() 等
+                if isinstance(node.func, ast.Attribute):
+                    parts = []
+                    obj = node.func
+                    while isinstance(obj, ast.Attribute):
+                        parts.append(obj.attr)
+                        obj = obj.value
+                    if isinstance(obj, ast.Name):
+                        parts.append(obj.id)
+                    call_path = ".".join(reversed(parts))
+                    for blocked in BLOCKED_ATTRS:
+                        if call_path.startswith(blocked):
+                            raise SecurityError(
+                                f"禁止调用: {call_path}() (第 {node.lineno} 行)"
+                            )
+
+            # 检查 __builtins__ 访问
+            elif isinstance(node, ast.Attribute):
+                if isinstance(node.value, ast.Name) and node.value.id == "__builtins__":
+                    raise SecurityError(
+                        f"禁止访问 __builtins__ (第 {node.lineno} 行)"
+                    )
 
     def _load_file(self, file_path: Path, strict: bool = False) -> int:
         """从文件加载爬虫类
@@ -149,9 +234,13 @@ class SpiderRegistry:
                 and not attr_name.startswith("_")
             ):
                 spider_name = getattr(attr, "name", "") or attr_name
-                # name 唯一性检查
-                if spider_name in self._spiders and strict:
-                    raise ValueError(f"爬虫 name '{spider_name}' 已存在")
+                # 覆盖已有的同名爬虫（更新场景）
+                if spider_name in self._spiders:
+                    logger.info(f"覆盖已有爬虫: {spider_name}")
+                    # 清理旧的 file_map 条目
+                    old_keys = [k for k, v in self._file_map.items() if v == spider_name]
+                    for k in old_keys:
+                        del self._file_map[k]
                 self._spiders[spider_name] = attr
                 self._file_map[str(file_path)] = spider_name
                 logger.info(f"注册爬虫: {spider_name} ({file_path})")

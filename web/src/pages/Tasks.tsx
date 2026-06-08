@@ -46,6 +46,7 @@ const TasksPage: React.FC = () => {
   useEffect(() => { load() }, [statusFilter, page])
 
   const openLogs = async (taskId: number) => {
+    setLogs([])
     setLogDrawer({ open: true, taskId })
     try {
       const data = await taskApi.logs(taskId, 200)

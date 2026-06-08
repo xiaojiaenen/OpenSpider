@@ -62,6 +62,7 @@ class TaskInfo(BaseModel):
     id: int
     spider_name: str
     status: str
+    created_at: datetime | None = None
     started_at: datetime | None = None
     finished_at: datetime | None = None
     items_scraped: int = 0

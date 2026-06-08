@@ -2,6 +2,11 @@ FROM python:3.13-slim
 
 WORKDIR /runtime
 
+# 安装 scrapling 运行所需的系统依赖
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libsqlite3-0 curl \
+    && rm -rf /var/lib/apt/lists/*
+
 RUN pip install --no-cache-dir scrapling[all] && \
     scrapling install --force 2>/dev/null || true
 

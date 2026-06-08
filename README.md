@@ -1,4 +1,4 @@
-# OpenSpider
+﻿# OpenSpider
 
 爬虫管理平台 — 管理多个爬虫的生命周期，暴露标准化 API 供外部 AI 集成。
 
@@ -136,36 +136,54 @@ openspider validate <file.py>         # 验证爬虫文件
 
 ```
 OpenSpider/
-├── openspider/
-│   ├── core/           # 核心引擎、注册表、调度器、恢复
-│   │   ├── engine.py   # 核心引擎（含 resume 断点恢复）
-│   │   ├── registry.py # 爬虫注册表（热加载）
-│   │   ├── runner.py   # 爬虫执行器
-│   │   ├── pipeline.py # 数据管道（多 Sink 分发）
-│   │   ├── scrapling_utils.py # Scrapling 配置转发（公共）
-│   │   └── sinks/      # 6 种 Sink：csv/excel/json/kafka/doris/parquet
-│   ├── spiders/        # 爬虫基类、模板、示例
-│   │   ├── base.py     # BaseSpider（select/export_items/adaptive）
-│   │   ├── templates.py # RuleSpider/SitemapRuleSpider
-│   │   └── examples/   # 多 Session 路由、XHR 拦截、页面交互示例
-│   ├── api/            # FastAPI 路由（JWT 认证）
-│   │   ├── auth.py     # JWT 认证中间件
-│   │   ├── auth_routes.py # 注册/登录/刷新/个人资料
-│   │   ├── routes.py   # 爬虫管理/任务/数据/导出
+├── openspider/              # 后端 Python 代码
+│   ├── api/                 # FastAPI 路由
+│   │   ├── auth.py          # JWT 认证中间件
+│   │   ├── auth_routes.py   # 注册/登录/刷新/个人资料
+│   │   ├── routes.py        # 爬虫管理/任务/数据/导出
 │   │   └── schedule_routes.py # 调度 CRUD
-│   ├── models/         # 数据模型（含 UserModel）
-│   ├── storage/        # 数据库连接 + Alembic 迁移
-│   └── utils/          # 工具（编码、表单、URL、安全/JWT）
-├── web/                # React + Ant Design 前端
+│   ├── core/                # 核心引擎
+│   │   ├── engine.py        # 核心引擎（含 resume 断点恢复）
+│   │   ├── registry.py      # 爬虫注册表（热加载）
+│   │   ├── runner.py        # 爬虫执行器
+│   │   ├── pipeline.py      # 数据管道（多 Sink 分发）
+│   │   ├── data_manager.py  # 动态建表 + 数据管理
+│   │   ├── scrapling_utils.py # Scrapling 配置转发
+│   │   └── sinks/           # 6 种 Sink：csv/excel/json/kafka/doris/parquet
+│   ├── models/              # 数据模型
+│   │   ├── user.py          # 用户模型
+│   │   ├── spider.py        # 爬虫模型
+│   │   ├── task.py          # 任务模型
+│   │   ├── log.py           # 日志模型
+│   │   └── schedule.py      # 调度模型
+│   ├── spiders/             # 爬虫基类、模板、示例
+│   │   ├── base.py          # BaseSpider
+│   │   ├── templates.py     # RuleSpider/SitemapRuleSpider
+│   │   └── examples/        # 示例爬虫
+│   ├── storage/             # 数据库连接 + Alembic 迁移
+│   ├── utils/               # 工具函数
+│   ├── config.py            # 配置管理
+│   ├── cli.py               # CLI 命令
+│   └── main.py              # 入口文件
+├── web/                     # 前端 React 代码
 │   ├── src/
-│   │   ├── pages/      # Login/Register/Dashboard/Spiders/Tasks/Schedules/Items/Settings
-│   │   ├── layouts/    # MainLayout（侧边栏 + Header）
-│   │   ├── services/   # API 封装（axios + JWT 拦截器）
-│   │   └── stores/     # Zustand 状态管理（auth）
-│   └── package.json
-├── skill/              # AI 集成 Skill 描述
-├── docs/               # 设计文档
-└── tests/              # 测试
+│   │   ├── pages/           # 页面组件
+│   │   ├── layouts/         # 布局组件
+│   │   ├── services/        # API 封装
+│   │   └── stores/          # 状态管理
+│   ├── package.json
+│   └── vite.config.ts
+├── deploy/                  # 部署配置
+│   ├── Dockerfile           # Docker 构建文件
+│   ├── docker-compose.yml   # Docker Compose 编排
+│   ├── .env.example         # 环境变量模板
+│   └── README.md            # 部署说明
+├── skill/                   # AI 集成 Skill 描述
+├── tests/                   # 测试
+├── docs/                    # 文档
+├── .env.example             # 环境变量模板
+├── pyproject.toml           # Python 项目配置
+└── README.md                # 项目说明
 ```
 
 ## 技术栈
@@ -180,3 +198,4 @@ OpenSpider/
 ## License
 
 MIT
+

@@ -6,7 +6,7 @@ import re
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, EmailStr, Field
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from openspider.api.auth import get_current_user
 from openspider.models.user import UserModel, UserRole, UserStatus
@@ -91,12 +91,16 @@ async def register(body: RegisterRequest):
         if exists.scalar_one_or_none():
             raise HTTPException(409, "邮箱已被注册")
 
+        # 第一个注册的用户自动成为 admin
+        user_count = await session.execute(select(func.count()).select_from(UserModel))
+        is_first_user = user_count.scalar() == 0
+
         user = UserModel(
             username=body.username,
             email=body.email,
             password_hash=hash_password(body.password),
             display_name=body.display_name or body.username,
-            role=UserRole.USER,
+            role=UserRole.ADMIN if is_first_user else UserRole.USER,
             status=UserStatus.ACTIVE,
         )
         session.add(user)
@@ -106,7 +110,7 @@ async def register(body: RegisterRequest):
 
     from openspider.config import settings
     return TokenResponse(
-        access_token=create_access_token(user_id, "user"),
+        access_token=create_access_token(user_id, user.role.value),
         refresh_token=create_refresh_token(user_id),
         expires_in=settings.jwt_access_expire_minutes * 60,
     )

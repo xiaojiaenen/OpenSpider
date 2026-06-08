@@ -19,13 +19,9 @@ const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) =
 }
 
 const App: React.FC = () => {
-  const { loadFromStorage, isAuthenticated, user, setUser } = useAuthStore()
+  const { isAuthenticated, user, setUser } = useAuthStore()
 
-  useEffect(() => {
-    loadFromStorage()
-  }, [])
-
-  // 仅当已登录但没有用户信息时才拉取（刷新时 localStorage 已有缓存）
+  // 仅当已登录但没有用户信息时才拉取（store 初始化时已从 localStorage 恢复）
   useEffect(() => {
     if (isAuthenticated && !user) {
       authApi.getMe().then(setUser).catch((err) => {
@@ -34,7 +30,7 @@ const App: React.FC = () => {
         }
       })
     }
-  }, [isAuthenticated, user])
+  }, [isAuthenticated, user, setUser])
 
   return (
     <BrowserRouter>

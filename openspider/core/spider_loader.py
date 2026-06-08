@@ -62,6 +62,8 @@ def _build_session_kwargs(spider) -> dict:
         kwargs["cookies"] = spider.cookies
     if spider.follow_redirects is False:
         kwargs["follow_redirects"] = False
+    elif spider.allow_internal_redirects:
+        kwargs["follow_redirects"] = True
     return kwargs
 
 
