@@ -100,3 +100,31 @@ class Pipeline:
                 logger.error(f"Pipeline: 添加 sink 失败: {e}")
 
         return pipeline
+
+    @classmethod
+    def from_config(
+        cls,
+        spider_name: str,
+        user_id: str | None = None,
+        primary_key: list[str] | None = None,
+        schema: dict | None = None,
+        sinks: list[dict] | None = None,
+    ) -> "Pipeline":
+        """从配置参数创建 Pipeline（不依赖爬虫实例）
+
+        用于沙箱模式：主进程中不需要实例化爬虫。
+        """
+        pipeline = cls(
+            spider_name=spider_name,
+            user_id=user_id,
+            primary_key=primary_key,
+            schema=schema,
+        )
+
+        for sink_config in (sinks or []):
+            try:
+                pipeline.add_sink(sink_config)
+            except Exception as e:
+                logger.error(f"Pipeline: 添加 sink 失败: {e}")
+
+        return pipeline

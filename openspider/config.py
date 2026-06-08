@@ -37,6 +37,13 @@ class Settings(BaseSettings):
     jwt_access_expire_minutes: int = 30
     jwt_refresh_expire_days: int = 7
 
+    # 沙箱
+    sandbox_mode: str = "subprocess"   # "subprocess" | "docker" | "none"
+    sandbox_docker_image: str = "openspider-runtime:latest"  # Docker 沙箱镜像
+    sandbox_memory_mb: int = 512       # 内存限制 (MB)
+    sandbox_cpu_seconds: int = 120     # CPU 时间限制 (秒)
+    sandbox_timeout: int = 600         # 墙钟超时 (秒)
+
     @property
     def database_url(self) -> str:
         """异步数据库连接 URL（MySQL 或 SQLite）"""

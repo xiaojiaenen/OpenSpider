@@ -1,0 +1,64 @@
+FROM python:3.13-slim
+
+WORKDIR /runtime
+
+RUN pip install --no-cache-dir scrapling[all] && \
+    scrapling install --force 2>/dev/null || true
+
+# 只复制爬虫运行需要的文件，不包含主进程代码、DB 凭据、JWT 密钥
+COPY openspider/spiders/base.py /runtime/base.py
+COPY openspider/spiders/templates.py /runtime/templates.py
+COPY openspider/core/scrapling_utils.py /runtime/scrapling_utils.py
+COPY openspider/core/sandbox_docker.py /runtime/sandbox_docker_runner.py
+
+# 创建运行时 runner 脚本（从 sandbox_docker.py 中提取）
+RUN python -c "
+from openspider.core.sandbox_docker import CONTAINER_RUNNER_SCRIPT
+with open('/runtime/runner.py', 'w') as f:
+    f.write(CONTAINER_RUNNER_SCRIPT)
+" 2>/dev/null || true
+
+# 如果上面失败（模块依赖不全），直接写入 runner 脚本
+COPY <<'EOF' /runtime/runner.py
+#!/usr/bin/env python3
+"""容器内爬虫执行器"""
+import asyncio, importlib.util, json, sys
+
+async def main():
+    code_path = sys.argv[1]
+    args = json.loads(sys.argv[2]) if len(sys.argv) > 2 else {}
+    spec = importlib.util.spec_from_file_location("spider_mod", code_path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    sys.path.insert(0, "/runtime")
+    from base import BaseSpider
+    spider_cls = None
+    for name in dir(module):
+        obj = getattr(module, name)
+        if isinstance(obj, type) and issubclass(obj, BaseSpider) and obj is not BaseSpider:
+            spider_cls = obj
+            break
+    if spider_cls is None:
+        print(json.dumps({"type": "error", "message": "No BaseSpider found"}))
+        sys.exit(1)
+    spider = spider_cls()
+    spider.params = args.get("params", {})
+    try:
+        async for item in spider.run():
+            if isinstance(item, dict):
+                processed = await spider.on_item_scraped(item)
+                if processed is not None:
+                    print(json.dumps({"type": "item", "data": processed}), flush=True)
+        print(json.dumps({"type": "done"}), flush=True)
+    except Exception as e:
+        print(json.dumps({"type": "error", "message": str(e)}), flush=True)
+        sys.exit(1)
+
+if __name__ == "__main__":
+    asyncio.run(main())
+EOF
+
+# 确保 runner 可执行
+RUN chmod +x /runtime/runner.py
+
+# 不暴露端口，不需要 CMD — 由 docker run 覆盖

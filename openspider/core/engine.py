@@ -84,6 +84,11 @@ class Engine:
         if spider_cls is None:
             raise ValueError(f"爬虫 {name} 不存在")
 
+        # 获取爬虫文件路径（用于沙箱执行）
+        spider_file_path = self.registry.get_file_path(name)
+        if spider_file_path is None:
+            raise ValueError(f"爬虫 {name} 对应的文件不存在")
+
         # 创建任务记录
         async with async_session() as session:
             task = TaskModel(
@@ -108,10 +113,22 @@ class Engine:
             await session.execute(stmt)
             await session.commit()
 
-        # 创建并启动执行器
-        spider_instance = spider_cls()
-        spider_instance.params = params or {}
-        runner = SpiderRunner(spider_instance, task_id, async_session, user_id=user_id)
+        # 爬虫元数据（从注册表获取，不需要实例化）
+        spider_attrs = {
+            "max_retries": getattr(spider_cls, "max_retries", 3),
+            "retry_delay": getattr(spider_cls, "retry_delay", 60),
+            "sandbox_timeout": getattr(spider_cls, "timeout", 30) * 20,
+        }
+
+        # 创建并启动执行器（沙箱模式）
+        runner = SpiderRunner(
+            spider_name=name,
+            spider_file_path=str(spider_file_path),
+            task_id=task_id,
+            db_session_factory=async_session,
+            spider_attrs=spider_attrs,
+            user_id=user_id,
+        )
         self._runners[name] = runner
         await runner.start()
 
@@ -138,11 +155,11 @@ class Engine:
         if runner is None or not runner.is_running:
             return False
 
-        # 发送停止信号，Scrapling 会将未完成的请求保存到 crawldir
+        # 发送停止信号
         await runner.stop()
 
         # 更新任务状态为 PAUSED 并记录 crawldir
-        crawldir = str(runner._get_crawldir())
+        crawldir = str(settings.crawl_data_dir / name)
         async with async_session() as session:
             from sqlalchemy import update as sa_update
             from openspider.models.task import TaskModel, TaskStatus

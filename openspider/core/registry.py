@@ -8,6 +8,7 @@ from pathlib import Path
 
 from loguru import logger
 
+from openspider.core.sandbox import validate_source
 from openspider.spiders.base import BaseSpider
 
 
@@ -33,6 +34,13 @@ class SpiderRegistry:
     def get(self, name: str) -> type[BaseSpider] | None:
         """按名称获取爬虫类"""
         return self._spiders.get(name)
+
+    def get_file_path(self, name: str) -> Path | None:
+        """按名称获取爬虫文件路径"""
+        for file_path, spider_name in self._file_map.items():
+            if spider_name == name:
+                return Path(file_path)
+        return None
 
     def list_all(self) -> list[dict]:
         """列出所有爬虫基本信息"""
@@ -104,6 +112,15 @@ class SpiderRegistry:
             if strict:
                 raise ValueError(f"语法错误: {e}") from e
             logger.warning(f"语法错误，跳过 {file_path}: {e}")
+            return 0
+
+        # AST 安全预检（Layer 0）
+        violations = validate_source(source, str(file_path))
+        if violations:
+            msg = f"安全校验失败 ({file_path}):\n" + "\n".join(f"  - {v}" for v in violations)
+            if strict:
+                raise ValueError(msg)
+            logger.warning(msg)
             return 0
 
         # 动态导入

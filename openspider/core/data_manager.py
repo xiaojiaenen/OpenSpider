@@ -13,6 +13,46 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 
+# ── SQL 注入防护：标识符/类型校验 ─────────────────────────
+
+_IDENTIFIER_RE = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
+
+_VALID_TYPE_RE = re.compile(
+    r"^(VARCHAR|CHAR|TEXT|INTEGER|INT|BIGINT|SMALLINT|FLOAT|DOUBLE|"
+    r"DECIMAL|NUMERIC|BOOLEAN|BOOL|DATE|DATETIME|TIMESTAMP|BLOB|JSON|"
+    r"REAL|SERIAL|INT NOT NULL AUTO_INCREMENT PRIMARY KEY|"
+    r"INTEGER PRIMARY KEY AUTOINCREMENT|DEFAULT)\b",
+    re.IGNORECASE,
+)
+
+_SQL_RESERVED = frozenset({
+    "select", "insert", "update", "delete", "drop", "table", "column",
+    "index", "from", "where", "or", "and", "null", "create", "alter",
+    "grant", "revoke", "union", "join", "set", "into", "values",
+})
+
+
+def _validate_identifier(name: str, context: str = "column") -> str:
+    """校验 SQL 标识符，不合法则抛 ValueError"""
+    if not name or not _IDENTIFIER_RE.match(name):
+        raise ValueError(f"非法{context}名: {name!r}（只允许字母数字下划线，不以数字开头）")
+    if len(name) > 64:
+        raise ValueError(f"{context}名过长: {name!r}")
+    if name.lower() in _SQL_RESERVED:
+        raise ValueError(f"{context}名是 SQL 保留字: {name!r}")
+    return name
+
+
+def _validate_column_type(ctype: str) -> str:
+    """校验列类型，只允许白名单内的类型关键字"""
+    if not ctype or not _VALID_TYPE_RE.match(ctype.strip()):
+        raise ValueError(f"非法列类型: {ctype!r}")
+    for ch in (";", "--", "/*", "*/", "'", '"', "(", ")"):
+        if ch in ctype:
+            raise ValueError(f"列类型含非法字符: {ctype!r}")
+    return ctype
+
+
 class SpiderDataManager:
     """爬虫数据管理器
 
@@ -134,6 +174,8 @@ class SpiderDataManager:
 
         # 建索引（幂等）
         if self.dedup_key:
+            for k in self.dedup_key:
+                _validate_identifier(k, "去重键")
             idx_name = f"idx_{self.table_name}_dedup"
             cols = ", ".join(self.dedup_key)
             await session.execute(
@@ -154,6 +196,8 @@ class SpiderDataManager:
             await self._add_missing_columns_mysql(session)
 
         if self.dedup_key:
+            for k in self.dedup_key:
+                _validate_identifier(k, "去重键")
             idx_name = f"idx_{self.table_name}_dedup"
             cols = ", ".join(self.dedup_key)
             # MySQL: 先检查索引是否存在，再创建
@@ -179,8 +223,8 @@ class SpiderDataManager:
 
         # 自定义字段
         for field in self.fields:
-            name = field["name"]
-            ftype = field.get("type", "VARCHAR(512)")
+            name = _validate_identifier(field["name"], "字段")
+            ftype = _validate_column_type(field.get("type", "VARCHAR(512)"))
             if not is_sqlite:
                 ftype = self._col_type_mysql(ftype)
             # 防止自定义字段覆盖标准列
@@ -207,8 +251,8 @@ class SpiderDataManager:
         existing_cols = {row[1] for row in result.fetchall()}
 
         for field in self.fields:
-            name = field["name"]
-            ftype = field.get("type", "VARCHAR(512)")
+            name = _validate_identifier(field["name"], "字段")
+            ftype = _validate_column_type(field.get("type", "VARCHAR(512)"))
             if name not in existing_cols and name not in self.STANDARD_COLUMN_NAMES:
                 await session.execute(
                     text(f"ALTER TABLE {self.table_name} ADD COLUMN {name} {ftype}")
@@ -225,8 +269,8 @@ class SpiderDataManager:
         existing_cols = {row[0] for row in result.fetchall()}
 
         for field in self.fields:
-            name = field["name"]
-            ftype = field.get("type", "VARCHAR(512)")
+            name = _validate_identifier(field["name"], "字段")
+            ftype = _validate_column_type(field.get("type", "VARCHAR(512)"))
             ftype_mysql = self._col_type_mysql(ftype)
             if name not in existing_cols and name not in self.STANDARD_COLUMN_NAMES:
                 await session.execute(
@@ -281,6 +325,9 @@ class SpiderDataManager:
 
             # 不插入 id（自增）和 crawled_at（默认值）
             cols = {k: v for k, v in params.items() if k not in ("id", "crawled_at")}
+            # 校验所有列名
+            for k in cols:
+                _validate_identifier(k, "列名")
             col_names = ", ".join(cols.keys())
             placeholders = ", ".join([f":{k}" for k in cols.keys()])
 
@@ -296,6 +343,11 @@ class SpiderDataManager:
 
             # 不插入 id 和 crawled_at
             cols = {k: v for k, v in params.items() if k not in ("id", "crawled_at")}
+            # 校验所有列名和 dedup_key
+            for k in cols:
+                _validate_identifier(k, "列名")
+            for k in (self.dedup_key or []):
+                _validate_identifier(k, "去重键")
             col_names = ", ".join(cols.keys())
             placeholders = ", ".join([f":{k}" for k in cols.keys()])
 
@@ -357,6 +409,7 @@ class SpiderDataManager:
         if filters:
             for key, value in filters.items():
                 # 白名单：只允许已知列名，防止 SQL 注入
+                _validate_identifier(key, "查询字段")
                 if key in self.STANDARD_COLUMN_NAMES or any(f["name"] == key for f in self.fields):
                     where_parts.append(f"{key} = :filter_{key}")
                     bind_params[f"filter_{key}"] = value

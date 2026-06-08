@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from fastapi import APIRouter, HTTPException, UploadFile, File, Query, Depends
 from openspider.api.auth import get_current_user
 from openspider.api.user_context import UserContext, get_ctx
@@ -314,14 +316,29 @@ async def upload_spider(file: UploadFile = File(...),
     if not file.filename or not file.filename.endswith(".py"):
         raise HTTPException(status_code=400, detail="仅支持 .py 文件")
 
+    # 防路径穿越：strip 所有目录组件，只保留纯文件名
+    safe_name = Path(file.filename).name
+    if not safe_name or safe_name.startswith(".") or safe_name.startswith("__"):
+        raise HTTPException(status_code=400, detail="无效的文件名")
+
+    # 读取并限制大小（512KB）
+    MAX_UPLOAD_SIZE = 512 * 1024
+    content = await file.read()
+    if len(content) > MAX_UPLOAD_SIZE:
+        raise HTTPException(status_code=400, detail=f"文件过大，最大 {MAX_UPLOAD_SIZE // 1024}KB")
+
     engine = get_engine()
 
-    # 保存到 spiders 目录
-    target_path = settings.spiders_dir / file.filename
-    content = await file.read()
+    # 安全路径：resolve 后确认在 spiders_dir 内
+    target_path = (settings.spiders_dir / safe_name).resolve()
+    spiders_dir_resolved = settings.spiders_dir.resolve()
+    if not str(target_path).startswith(str(spiders_dir_resolved)):
+        raise HTTPException(status_code=400, detail="非法路径")
+
+    target_path = Path(target_path)
     target_path.write_bytes(content)
 
-    # 注册
+    # 注册（register_file 内部会执行 AST 预检 + exec_module）
     try:
         engine.registry.register_file(target_path)
         registered = [name for name, cls in engine.registry.spiders.items()
