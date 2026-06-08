@@ -50,6 +50,12 @@ class SpiderUploadResponse(BaseModel):
     registered_spiders: list[str] = []
 
 
+class SpiderCreateRequest(BaseModel):
+    """通过代码字符串创建爬虫"""
+    filename: str = Field(..., description="文件名，如 my_spider.py")
+    code: str = Field(..., description="Python 爬虫源代码")
+
+
 class SpiderVisibilityRequest(BaseModel):
     """切换爬虫公开/私有"""
     is_public: bool

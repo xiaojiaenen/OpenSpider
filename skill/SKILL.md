@@ -417,3 +417,328 @@ class MySpider(BaseSpider):
 - `use_stealth=True` 时 `get()`/`post()` 自动使用浏览器
 - 失败自动重试（`max_retries` 次，指数退避）
 - 暂停后可恢复（利用 Scrapling crawldir 断点机制）
+
+---
+
+# OpenSpider API 参考
+
+所有需要认证的接口在 Header 中携带：`Authorization: Bearer <access_token>`
+
+## 认证
+
+### 登录
+
+```
+POST /auth/login/json
+Content-Type: application/json
+
+{"username": "admin", "password": "123456"}
+```
+
+响应：
+```json
+{
+  "access_token": "eyJ...",
+  "refresh_token": "eyJ...",
+  "token_type": "bearer",
+  "expires_in": 1800
+}
+```
+
+### 刷新 Token
+
+```
+POST /auth/refresh
+Content-Type: application/json
+
+{"refresh_token": "<refresh_token>"}
+```
+
+### 注册
+
+```
+POST /auth/register
+Content-Type: application/json
+
+{"username": "user1", "email": "u@example.com", "password": "123456", "display_name": "用户1"}
+```
+
+### 获取当前用户
+
+```
+GET /auth/me
+```
+
+### 修改密码
+
+```
+PUT /auth/me/password
+Content-Type: application/json
+
+{"old_password": "123456", "new_password": "654321"}
+```
+
+## 爬虫管理
+
+### 列出爬虫
+
+```
+GET /spiders
+```
+
+响应：
+```json
+{
+  "spiders": [
+    {
+      "id": 1,
+      "name": "my_spider",
+      "description": "抓取示例网站",
+      "schedule": "0 */6 * * *",
+      "is_running": false,
+      "is_public": false,
+      "items_scraped": 100,
+      "requests_made": 50,
+      "errors_count": 0
+    }
+  ],
+  "total": 1
+}
+```
+
+### 获取爬虫详情
+
+```
+GET /spiders/{name}
+```
+
+### 通过代码字符串创建爬虫
+
+```
+POST /spiders/create
+Content-Type: application/json
+
+{
+  "filename": "my_spider.py",
+  "code": "from openspider.spiders.base import BaseSpider\n\nclass MySpider(BaseSpider):\n    name = 'my_spider'\n    start_urls = ['https://example.com']\n\n    async def run(self):\n        page = await self.get(self.start_urls[0])\n        for item in page.css('.article'):\n            yield {'title': item.css('h2::text').get('')}\n"
+}
+```
+
+响应：
+```json
+{
+  "success": true,
+  "message": "创建成功，注册了 1 个爬虫",
+  "registered_spiders": ["my_spider"]
+}
+```
+
+### 通过文件上传创建爬虫
+
+```
+POST /spiders/upload
+Content-Type: multipart/form-data
+
+file=@my_spider.py
+```
+
+### 获取爬虫源代码
+
+```
+GET /spiders/{spider_id}/code
+```
+
+### 启动爬虫
+
+```
+POST /spiders/{spider_id}/start
+Content-Type: application/json
+
+{"params": {"keyword": "python"}}
+```
+
+响应：
+```json
+{
+  "success": true,
+  "message": "爬虫 my_spider 已启动",
+  "task_id": 42
+}
+```
+
+### 停止爬虫
+
+```
+POST /spiders/{spider_id}/stop
+```
+
+### 暂停爬虫（断点保留）
+
+```
+POST /spiders/{spider_id}/pause
+```
+
+### 恢复爬虫（从断点继续）
+
+```
+POST /spiders/{spider_id}/resume
+```
+
+### 删除爬虫
+
+```
+DELETE /spiders/{spider_id}
+```
+
+### 设置爬虫公开/私有
+
+```
+PUT /spiders/{spider_id}/visibility
+Content-Type: application/json
+
+{"is_public": true}
+```
+
+## 任务查询
+
+### 任务列表
+
+```
+GET /tasks?spider=my_spider&status=running&limit=50&offset=0
+```
+
+响应：
+```json
+{
+  "tasks": [
+    {
+      "id": 42,
+      "spider_name": "my_spider",
+      "status": "completed",
+      "created_at": "2024-01-01T00:00:00",
+      "started_at": "2024-01-01T00:00:01",
+      "finished_at": "2024-01-01T00:05:00",
+      "items_scraped": 100,
+      "requests_made": 50,
+      "errors_count": 0,
+      "params": {}
+    }
+  ],
+  "total": 1
+}
+```
+
+### 任务详情
+
+```
+GET /tasks/{task_id}
+```
+
+### 任务日志
+
+```
+GET /tasks/{task_id}/logs?limit=100
+```
+
+## 数据查询
+
+### 查询爬虫数据
+
+```
+GET /spiders/{spider_id}/data?page=1&page_size=50
+```
+
+响应：
+```json
+{
+  "items": [{"title": "示例标题", "url": "https://..."}],
+  "total": 100,
+  "page": 1,
+  "page_size": 50,
+  "columns": ["title", "url"]
+}
+```
+
+### 导出爬虫数据
+
+```
+GET /spiders/{spider_id}/export?format=json&limit=10000
+```
+
+支持格式：`json`（默认）、`jsonl`、`csv`
+
+### 获取爬虫字段定义
+
+```
+GET /spiders/{spider_id}/fields
+```
+
+## 调度管理
+
+### 列出调度
+
+```
+GET /schedules
+```
+
+### 创建调度
+
+```
+POST /schedules
+Content-Type: application/json
+
+{
+  "spider_name": "my_spider",
+  "cron": "0 */6 * * *",
+  "params": {"keyword": "python"}
+}
+```
+
+### 更新调度
+
+```
+PUT /schedules/{schedule_id}
+Content-Type: application/json
+
+{"cron": "0 */12 * * *", "params": {"keyword": "java"}}
+```
+
+### 删除调度
+
+```
+DELETE /schedules/{schedule_id}
+```
+
+### 启用调度
+
+```
+POST /schedules/{schedule_id}/enable
+```
+
+### 禁用调度
+
+```
+POST /schedules/{schedule_id}/disable
+```
+
+### 调度执行记录
+
+```
+GET /schedules/{schedule_id}/runs?limit=10
+```
+
+## 系统
+
+### 健康检查（无需认证）
+
+```
+GET /health
+```
+
+### 平台能力描述（无需认证）
+
+```
+GET /capabilities
+```
+
+返回平台支持的爬虫接口、配置属性、API 列表等，供 AI 调用时参考。

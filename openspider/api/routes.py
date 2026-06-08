@@ -18,6 +18,7 @@ from openspider.api.schemas import (
     SpiderStartRequest,
     SpiderActionResponse,
     SpiderUploadResponse,
+    SpiderCreateRequest,
     SpiderVisibilityRequest,
     SpiderDataResponse,
     SpiderFieldsResponse,
@@ -358,6 +359,60 @@ async def upload_spider(file: UploadFile = File(...),
         return SpiderUploadResponse(
             success=True,
             message=f"上传成功，注册了 {len(registered)} 个爬虫",
+            registered_spiders=registered,
+        )
+    except ValueError as e:
+        target_path.unlink(missing_ok=True)
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/spiders/create", response_model=SpiderUploadResponse)
+async def create_spider(body: SpiderCreateRequest,
+                        ctx: UserContext = Depends(get_ctx)):
+    """通过代码字符串创建爬虫（写入文件并注册）"""
+    # 文件名校验
+    safe_name = Path(body.filename).name
+    if not safe_name.endswith(".py"):
+        safe_name += ".py"
+    if safe_name.startswith(".") or safe_name.startswith("__"):
+        raise HTTPException(status_code=400, detail="无效的文件名")
+
+    # 代码大小限制（512KB）
+    MAX_SIZE = 512 * 1024
+    if len(body.code.encode("utf-8")) > MAX_SIZE:
+        raise HTTPException(status_code=400, detail=f"代码过大，最大 {MAX_SIZE // 1024}KB")
+
+    engine = get_engine()
+
+    # 安全路径
+    target_path = (settings.spiders_dir / safe_name).resolve()
+    spiders_dir_resolved = settings.spiders_dir.resolve()
+    if not str(target_path).startswith(str(spiders_dir_resolved)):
+        raise HTTPException(status_code=400, detail="非法路径")
+
+    target_path = Path(target_path)
+    target_path.write_text(body.code, encoding="utf-8")
+
+    # 注册
+    try:
+        engine.registry.register_file(target_path)
+        registered = [name for name, cls in engine.registry.spiders.items()
+                      if str(target_path) in engine.registry._file_map]
+
+        # 设置 owner
+        if ctx.user_id:
+            async with async_session() as session:
+                for spider_name in registered:
+                    await session.execute(
+                        update(SpiderModel)
+                        .where(SpiderModel.name == spider_name)
+                        .values(owner_user_id=ctx.user_id)
+                    )
+                await session.commit()
+
+        return SpiderUploadResponse(
+            success=True,
+            message=f"创建成功，注册了 {len(registered)} 个爬虫",
             registered_spiders=registered,
         )
     except ValueError as e:
