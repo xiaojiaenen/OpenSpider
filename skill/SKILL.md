@@ -1,36 +1,21 @@
-﻿---
+---
 name: openspider
 description: |
-  通过 OpenSpider 平台管理爬虫。当用户想要创建、运行、停止、监控爬虫或导出爬取数据时使用此 Skill。当用户提到爬取网站、抓取数据、编写爬虫、自动化数据采集、管理多个爬虫任务时，都应使用此 Skill。即使用户只是说"我需要从这个网站获取数据"�?帮我抓取 X"，也应该使用�?Skill。平台基�?Scrapling 构建，支持反爬绕过、Cloudflare 破解、浏览器指纹伪装、并发爬取、暂停恢复等能力�?
+  通过 OpenSpider 平台编写和管理爬虫。当用户想要从网站抓取数据、编写爬虫、自动化数据采集时使用此 Skill。即使用户只是说"帮我抓取 X"、"我需要从这个网站获取数据"，也应使用此 Skill。
 ---
 
-# OpenSpider 爬虫管理平台
+# OpenSpider 爬虫编写指南
 
-基于 Scrapling 构建的爬虫管理平台。管理多个爬虫的完整生命周期——注册、启停、暂停恢复、失败重试、定时调度、数据导出，通过标准 HTTP API 暴露所有能力�?
+所有爬虫继承 `BaseSpider`，实现 `run()` 方法，yield 数据字典。
 
-底层使用 Scrapling �?Spider 框架执行爬取，复用其并发调度、请求去重、代理轮换、暂停恢复（crawldir）等能力，不在上层造轮子�?
-
-
-## 核心流程
-
-1. **分析目标** �?抓取页面，检查结构，确定选择器和反爬等级
-2. **编写爬虫** �?继承 `BaseSpider`，实�?`run()` �?`parse()`
-3. **上传** �?`POST /spiders/upload`
-4. **启动** �?`POST /spiders/{name}/start`
-5. **监控** �?轮询 `GET /tasks?spider={name}`
-6. **获取数据** �?`GET /items?spider={name}`
-
-## 编写爬虫代码
-
-所有爬虫继�?`BaseSpider`。底层自动创�?Scrapling Spider 子类执行，复用其并发/去重/代理/暂停恢复�?
-
-### 简单模�?�?run()
+## 最简示例
 
 ```python
 from openspider.spiders.base import BaseSpider
 
 class MySpider(BaseSpider):
     name = "my_spider"
+    description = "抓取示例网站"
     start_urls = ["https://example.com"]
 
     async def run(self):
@@ -38,440 +23,397 @@ class MySpider(BaseSpider):
         for item in page.css(".article"):
             if self.should_stop:
                 break
-            yield {"title": item.css("h2::text").get("")}
+            yield {
+                "title": item.css("h2::text").get(""),
+                "link": item.css("a::attr(href)").get(""),
+            }
 ```
 
-### 高级模式 �?parse(response) 回调
+## 请求方法
 
-适合多级页面跟进、列表→详情、自动翻页。yield Request 自动加入 Scrapling 的请求队列，享受并发、去重、代理轮换：
+```python
+page = await self.get(url)           # GET 请求
+page = await self.post(url, data={}) # POST 请求
+page = await self.fetch(url)         # 同 get()
+```
+
+返回 Scrapling Response 对象，支持 CSS/XPath 选择器：
+```python
+page.css("div.title::text").get("")         # 单个文本
+page.css("a::attr(href)").getall()          # 所有链接
+page.xpath("//h1/text()").get("")           # XPath
+page.css("div.item", adaptive=True)         # 自适应选择器
+```
+
+## 高级模式：parse() 回调
+
+适合多级页面（列表→详情、自动翻页）：
 
 ```python
 class BlogSpider(BaseSpider):
     name = "blog"
-    start_urls = ["https://example.com/posts"]
+    start_urls = ["https://blog.example.com"]
 
     async def parse(self, response):
         for link in response.css("a.post-link::attr(href)").getall():
-            yield self.follow(link, callback=self.parse_post)
-        next_page = response.css("a.next::attr(href)").get()
-        if next_page:
-            yield self.follow(next_page, callback=self.parse)
+            yield self.follow(link, callback=self.parse_detail)
 
-    async def parse_post(self, response):
-        yield {"title": response.css("h1::text").get(""), "url": response.url}
+    async def parse_detail(self, response):
+        yield {
+            "title": response.css("h1::text").get(""),
+            "content": response.css("article").get(""),
+        }
 ```
 
-自动识别：实�?`parse()` 走回调模式，否则�?`run()` 模式。两种模式都通过 Scrapling Spider 执行�?
+## 并发请求
 
-### 可用方法
+```python
+urls = ["https://example.com/page/1", "https://example.com/page/2"]
+async for resp in self.concurrent_fetch(urls, max_concurrent=5):
+    yield {"url": resp.url, "title": resp.css("h1::text").get("")}
+```
 
-| 方法 | 说明 |
-|------|------|
-| `await self.get(url, **kwargs)` | HTTP GET，返�?Scrapling Response |
-| `await self.post(url, **kwargs)` | HTTP POST，返�?Scrapling Response |
-| `self.follow(url, callback=)` | 创建跟进请求，自动解析相�?URL + Referer（委�?Scrapling response.follow�?|
-| `self.request(url, callback=)` | 创建 Scrapling Request 对象 |
-| `self.select(response, selector, css=True)` | 统一选择器，自动应用 adaptive 自适应配置 |
-| `self.export_items(items, format, path)` | 数据导出工具（json/csv/parquet/pandas�?|
-| `self.should_stop` | 检查停止信�?|
-| `self.session` | Scrapling session 实例 |
-| `self.env(key, default=None)` | 读取环境变量（敏感参数） |
-| `self.params` | 运行时参数字典（API/CLI 传入�?|
+## 字段定义（自动建表）
 
-### 三层参数体系
+定义 `fields` 后，平台自动创建数据库表存储数据：
 
-**静态配�?* �?类属性：
+```python
+class ProductSpider(BaseSpider):
+    name = "products"
+    fields = [
+        {"name": "title", "type": "VARCHAR(512)"},
+        {"name": "price", "type": "VARCHAR(64)"},
+        {"name": "url", "type": "VARCHAR(2048)"},
+    ]
+    dedup_key = ["url"]  # 去重键，相同 url 不重复插入
+```
+
+## 常用配置
+
 ```python
 class MySpider(BaseSpider):
     name = "my_spider"
-    concurrent_requests = 4  # Scrapling 并发�?
-    use_stealth = True       # Scrapling 隐身模式
+    start_urls = ["https://example.com"]
+
+    # 请求控制
+    concurrent_requests = 4        # 并发数
+    download_delay = 0.5           # 请求间隔（秒）
+    timeout = 30                   # 超时秒数
+    max_retries = 3                # 重试次数
+
+    # 反爬
+    impersonate = "chrome"         # TLS 指纹伪装
+    proxies = ["http://proxy:8080"]  # 代理
+    block_ads = True               # 屏蔽广告域名
+
+    # 浏览器模式（use_stealth=True 时生效）
+    use_stealth = True             # 启用隐身浏览器
+    solve_cloudflare = True        # 自动破解 Cloudflare
+    wait_selector = ".content"     # 等待元素出现
+    wait = 2000                    # 额外等待毫秒
+    capture_xhr = r"/api/data"     # 拦截 XHR 请求
+
+    # 数据
+    crawl_mode = "incremental"     # incremental（增量）| full（全量，清空表再跑）
 ```
 
-**运行时参�?* �?API/CLI 传入�?
+## 页面交互（浏览器模式）
+
 ```python
 async def run(self):
-    keyword = self.params.get("keyword", "default")
-```
-`POST /spiders/search/start` Body: `{"params": {"keyword": "Python"}}`
+    async def scroll_page(page):
+        await page.mouse.wheel(0, 1000)
+        await page.wait_for_timeout(2000)
 
-**敏感参数** �?环境变量�?
-```python
-async def run(self):
-    api_key = self.env("API_KEY")
+    page = await self.get("https://example.com", page_action=scroll_page)
+    yield {"data": page.css(".item").getall()}
 ```
 
-### 生命周期钩子
-
-| 钩子 | 触发时机 |
-|------|----------|
-| `on_start(resuming=False)` | 启动�?|
-| `on_error(error)` | 异常�?|
-| `on_complete()` | 完成�?|
-| `on_item_scraped(item)` | 每条数据后处理，返回 None 丢弃 |
-
-### 配置属�?
-
-**基本�?*
-
-| 属�?| 默认�?| 说明 |
-|------|--------|------|
-| `name` | 必填 | 唯一标识 |
-| `start_urls` | `[]` | 入口 URL（Scrapling Spider 自动遍历�?|
-| `concurrent_requests` | `4` | Scrapling 并发请求�?|
-| `download_delay` | `0.5` | Scrapling 请求间隔秒数 |
-| `robots_txt_obey` | `False` | Scrapling 遵守 robots.txt |
-| `proxies` | `[]` | 代理列表（多个时自动使用 Scrapling ProxyRotator 轮换�?|
-| `schedule` | `None` | cron 表达�?|
-| `max_retries` | `3` | 平台级重试次�?|
-| `development_mode` | `False` | Scrapling 响应缓存（开发调试用�?|
-
-**数据管道�?*
-
-| 属�?| 默认�?| 说明 |
-|------|--------|------|
-| `fields` | `[]` | 字段定义，格�?`[{"name": "title", "type": "VARCHAR(512)"}]`，定义后自动建表 |
-| `dedup_key` | `None` | 去重键，有值则 UPSERT，无值则追加 |
-| `crawl_mode` | `"incremental"` | 采集模式：`incremental`（增量）/ `full`（全量，运行前清空表�?|
-| `sinks` | `[]` | 数据输出目标，如 `[{"type":"csv","path":"./data/out.csv"}]` |
-
-**反爬与浏览器（Scrapling StealthyFetcher）：**
-
-| 属�?| 默认�?| 说明 |
-|------|--------|------|
-| `use_stealth` | `False` | Scrapling 隐身浏览器模�?|
-| `impersonate` | `"chrome"` | Scrapling TLS 指纹伪装 |
-| `solve_cloudflare` | `False` | Scrapling 自动破解 Cloudflare |
-| `block_webrtc` | `False` | Scrapling 阻断 WebRTC |
-| `hide_canvas` | `False` | Scrapling Canvas 噪声 |
-| `real_chrome` | `False` | Scrapling 使用真实 Chrome |
-| `block_ads` | `False` | Scrapling 屏蔽 3500+ 广告域名 |
-| `capture_xhr` | `None` | Scrapling XHR 拦截 URL 正则 |
-| `max_pages` | `1` | Scrapling 浏览器标签页�?|
-
-**站点兼容（Scrapling FetcherSession）：**
-
-| 属�?| 默认�?| 说明 |
-|------|--------|------|
-| `ssl_verify` | `True` | SSL 证书验证 |
-| `timeout` | `30` | 超时秒数 |
-| `default_headers` | `{}` | 默认请求�?|
-| `cookies` | `{}` | 预设 Cookie |
-| `network_idle` | `False` | 等待网络空闲 |
-| `wait_selector` | `None` | 等待选择器出�?|
-
-## 数据存储
-
-### 动态建�?
-
-爬虫通过 `fields` 定义字段，平台自动创建独立数据表 `spider_{id}_{name}`�?
+## XHR 拦截（SPA 应用）
 
 ```python
-class ProductSpider(BaseSpider):
-    name = "product"
-    fields = [
-        {"name": "name", "type": "VARCHAR(256)"},
-        {"name": "price", "type": "DECIMAL(10,2)"},
-        {"name": "stock", "type": "INTEGER"},
-    ]
-    dedup_key = ["name"]  # 有去重键�?UPSERT，无则追�?
+class SpaSpider(BaseSpider):
+    name = "spa_demo"
+    use_stealth = True
+    capture_xhr = r"/api/items"
+
+    async def run(self):
+        page = await self.get("https://spa-site.com")
+        for xhr in page.captured_xhr:
+            data = xhr.json()
+            yield data
 ```
 
-### 采集模式
-
-| 模式 | 说明 | 行为 |
-|------|------|------|
-| `incremental` | 增量（默认） | �?`dedup_key` �?UPSERT，无则追�?|
-| `full` | 全量 | 运行前清空表，然后重新写�?|
+## 生命周期钩子
 
 ```python
-class FullSyncSpider(BaseSpider):
-    name = "full_sync"
-    crawl_mode = "full"  # 每次运行前清空表
-    fields = [{"name": "title", "type": "VARCHAR(512)"}]
+async def on_start(self):
+    """爬虫启动前"""
+    pass
+
+async def on_complete(self):
+    """爬虫完成后"""
+    pass
+
+async def on_error(self, error: Exception):
+    """出错时"""
+    pass
+
+async def on_item_scraped(self, item: dict) -> dict | None:
+    """每条数据后处理，返回 None 则丢弃"""
+    return item
 ```
-
-### 指定数据�?
-
-爬虫可以通过 `db` 属性指定使用哪个数据源（需管理员在平台配置）：
-
-```python
-class ProductSpider(BaseSpider):
-    name = "product"
-    db = "mysql_prod"  # 使用管理员配置的 mysql_prod 数据�?
-    fields = [{"name": "name", "type": "VARCHAR(256)"}]
-```
-
-不指定则使用默认数据源�?
-
-## 模式选择
-
-- **静�?HTML** �?默认模式
-- **JS 动态加�?* �?`network_idle=True` �?`wait_selector=".content"`
-- **反爬保护** �?`use_stealth=True`，`solve_cloudflare=True`
-- **SPA API 数据** �?`capture_xhr=r"https://api\.example\.com/.*"`
-- **SSL 证书问题** �?`ssl_verify=False`
-- **真实浏览�?* �?`use_stealth=True`，`real_chrome=True`，`block_webrtc=True`
 
 ## 模板爬虫
 
-### RuleSpider（Scrapling CrawlSpider 包装�?
+### RuleSpider（规则驱动）
+
+自动跟进链接，声明式规则：
 
 ```python
 from openspider.spiders.templates import RuleSpider
-from scrapling.spiders import CrawlRule, LinkExtractor
 
 class BlogCrawler(RuleSpider):
     name = "blog"
-    start_urls = ["https://example.com"]
+    start_urls = ["https://blog.example.com"]
+
     def rules(self):
+        from scrapling.spiders import CrawlRule, LinkExtractor
         return [
             CrawlRule(LinkExtractor(allow=r"/posts/"), callback=self.parse_post),
-            CrawlRule(LinkExtractor(allow=r"/page/\d+/")),
         ]
+
     async def parse_post(self, response):
         yield {"title": response.css("h1::text").get("")}
 ```
 
-### SitemapRuleSpider（Scrapling SitemapSpider 包装�?
+### SitemapRuleSpider（Sitemap 驱动）
 
 ```python
 from openspider.spiders.templates import SitemapRuleSpider
-from scrapling.spiders import CrawlRule, LinkExtractor
 
-class ProductSitemap(SitemapRuleSpider):
+class ProductCrawler(SitemapRuleSpider):
     name = "products"
     sitemap_urls = ["https://shop.example.com/sitemap.xml"]
+
     def rules(self):
-        return [CrawlRule(LinkExtractor(allow=r"/products/"), callback=self.parse_product)]
+        from scrapling.spiders import CrawlRule, LinkExtractor
+        return [
+            CrawlRule(LinkExtractor(allow=r"/products/"), callback=self.parse_product),
+        ]
+
     async def parse_product(self, response):
-        yield {"name": response.css("h1::text").get("")}
+        yield {"name": response.css("h1::text").get(""), "price": response.css(".price::text").get("")}
 ```
 
-模板爬虫通过 `configure_sessions()` 转发所有配置（代理、隐身、超时等）给 Scrapling�?
+## 数据存储与管道（Sinks）
 
-## �?Session 路由
+### 默认行为
 
-在同一爬虫内混合使用快�?HTTP 和隐身浏览器�?
-
-```python
-from openspider.spiders.base import BaseSpider
-from scrapling.spiders import Request
-
-class MixedSpider(BaseSpider):
-    name = "mixed"
-    start_urls = ["https://example.com"]
-    stealth_url_patterns = ["/protected", "/login"]
-
-    async def parse(self, response):
-        for link in response.css("a::attr(href)").getall():
-            if any(pat in link for pat in self.stealth_url_patterns):
-                yield Request(link, sid="stealth", callback=self.parse_stealth)
-            else:
-                yield response.follow(link, callback=self.parse)
-
-    async def parse_stealth(self, response):
-        yield {"url": response.url, "title": response.css("title::text").get("")}
-
-    def configure_sessions(self, manager):
-        from scrapling.fetchers import FetcherSession, AsyncStealthySession
-        manager.add("default", FetcherSession(impersonate="chrome"))
-        manager.add("stealth", AsyncStealthySession(headless=True, solve_cloudflare=True), lazy=True)
-```
-
-## XHR/API 拦截
-
-拦截 SPA 应用�?API 请求，直接获�?JSON 数据�?
+不配置 `sinks` 时，只要定义了 `fields`，数据自动写入数据库（平台自动建表）。这是最常用的方式，不需要额外配置。
 
 ```python
-class SPASpider(BaseSpider):
-    name = "spa_demo"
-    start_urls = ["https://spa-app.example.com"]
-    use_stealth = True
-    network_idle = True
-    capture_xhr = r"https://api\.example\.com/.*"  # 拦截匹配�?API 请求
-    wait_selector = ".data-loaded"
+class ProductSpider(BaseSpider):
+    name = "products"
+    fields = [
+        {"name": "title", "type": "VARCHAR(512)"},
+        {"name": "price", "type": "VARCHAR(64)"},
+        {"name": "url", "type": "VARCHAR(2048)"},
+    ]
+    dedup_key = ["url"]  # 可选：相同 url 不重复插入（upsert）
 
     async def run(self):
-        page = await self.get(self.start_urls[0])
-        # 从拦截的 XHR 中获取结构化数据
-        if hasattr(page, 'captured_xhr'):
-            for xhr in page.captured_xhr:
-                data = xhr.json() if hasattr(xhr, 'json') else None
-                if data:
-                    yield {"api_data": data}
+        page = await self.get("https://shop.com/products")
+        for item in page.css(".product"):
+            yield {
+                "title": item.css("h2::text").get(""),
+                "price": item.css(".price::text").get(""),
+                "url": item.css("a::attr(href)").get(""),
+            }
 ```
 
-## 页面交互（page_action / page_setup�?
+### 自定义 Sink
 
-在浏览器中执行自定义操作�?
-
-```python
-async def scroll_and_wait(page):
-    """page_action: 滚动到底部加载更�?""
-    await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-    await page.wait_for_timeout(2000)
-
-async def close_popups(page):
-    """page_setup: 关闭弹窗"""
-    try:
-        btn = page.locator("#cookie-accept")
-        if await btn.count() > 0:
-            await btn.click(timeout=2000)
-    except Exception:
-        pass
-
-class ScrollSpider(BaseSpider):
-    name = "scroll_demo"
-    use_stealth = True
-    page_action = scroll_and_wait   # 加载后执�?
-    page_setup = close_popups        # 加载前执�?
-```
-
-## 自适应选择器（adaptive�?
-
-页面结构变化后自动重定位元素�?
+配置 `sinks` 后，数据只写入指定的 sinks，不再写默认数据库：
 
 ```python
-class AdaptiveSpider(BaseSpider):
-    name = "adaptive_demo"
-    adaptive = True          # 启用自适应选择�?
+class ExportSpider(BaseSpider):
+    name = "export_demo"
+    sinks = [
+        {"type": "csv", "path": "./output/data.csv"},
+        {"type": "json", "path": "./output/data.jsonl"},
+    ]
 
     async def run(self):
-        page = await self.get(self.start_urls[0])
-        # select() 自动应用 adaptive 配置
-        for item in self.select(page, ".product-item"):
-            yield {"title": item.css("h2::text").get("")}
+        yield {"name": "test", "value": 123}
 ```
 
-## 数据导出
+### 可用 Sink 类型
 
-BaseSpider 提供便捷的导出工具：
+| type | 说明 | 必填参数 |
+|------|------|----------|
+| `csv` | CSV 文件 | `path` |
+| `json` | JSON/JSONL 文件 | `path` |
+| `excel` | Excel 文件 | `path` |
+| `parquet` | Parquet 列式文件 | `path` |
+| `kafka` | Apache Kafka | `topic`, `bootstrap_servers` |
+| `doris` | Apache Doris Stream Load | `host`, `database`, `table` |
 
-```python
-# �?on_complete 中导�?
-async def on_complete(self):
-    # 直接使用 Scrapling �?items 导出
-    self.export_items(self._items, format="json", path="output.json")
-    self.export_items(self._items, format="csv", path="output.csv")
-    self.export_items(self._items, format="parquet", path="output.parquet")
+多个 sink 可同时使用：
 
-    # 获取 pandas DataFrame
-    df = self.export_items(self._items, format="pandas")
-```
-
-数据管道也支�?parquet 格式�?
 ```python
 sinks = [
-    {"type": "parquet", "path": "./data/output.parquet"},
-    {"type": "csv", "path": "./data/output.csv"},
+    {"type": "csv", "path": "./data.csv"},
+    {"type": "kafka", "topic": "products", "bootstrap_servers": "kafka:9092"},
 ]
 ```
 
-## 断点恢复
+## 编码处理
 
-通过 pause/resume API 暂停并恢复爬取：
-
-```
-POST /spiders/{name}/pause    # 暂停（Scrapling 保存断点�?crawldir�?
-POST /spiders/{name}/resume   # 从断点恢�?
-```
-
-暂停�?Scrapling 自动将未完成的请求保存到 `crawl_data/{spider_name}/`�?
-恢复时自动从断点继续，无需重新抓取已处理的页面�?
-
-## development_mode 开发调�?
-
-设置 `development_mode = True` 启用响应缓存�?
-- 首次运行：请求发送到目标网站，响应缓存到磁盘
-- 后续运行：直接读取缓存，不重新请�?
-- 缓存位置：`.scrapling_cache/{spider.name}/`
-- **不要在生产环境启�?*
-
-## API 接口
-
-```
-GET    /spiders                  # 列出所有爬�?
-POST   /spiders/{name}/start     # 启动（Body: {"params": {...}}�?
-POST   /spiders/{name}/stop      # 停止
-POST   /spiders/{name}/pause     # 暂停（crawldir 保留断点�?
-POST   /spiders/{name}/resume    # 从断点恢�?
-DELETE /spiders/{name}           # 删除
-POST   /spiders/upload           # 上传 .py 文件
-GET    /tasks?spider=&status=    # 任务列表
-GET    /tasks/{id}/logs          # 任务日志
-GET    /items?spider=            # 数据查询
-GET    /export/{name}?format=    # 导出（json/jsonl/csv/parquet�?
-GET    /health                   # 健康检�?
-GET    /capabilities             # 能力描述（给 AI�?
-```
-
-## CLI
-
-```bash
-openspider serve                      # 启动平台
-openspider list                       # 列出爬虫
-openspider start <name> [-p k=v]     # 启动（可传参数）
-openspider stop <name>               # 停止
-openspider info <name>               # 详情
-openspider tasks [--spider=]         # 任务列表
-openspider logs <task_id>            # 任务日志
-openspider export <name> --format=   # 导出数据
-openspider add <file.py>             # 注册爬虫
-openspider validate <file.py>        # 校验文件
-```
-
-## 辅助工具
-
-- **`openspider.utils.form`** �?表单字段提取、隐藏字段收集、ASP.NET ViewState 提取
-- **`openspider.utils.url`** �?jsessionid 剥离、URL 拼接和规范化
-- **`openspider.utils.selector`** �?`find_by_text`、`find_by_regex`、`find_similar` 增强查找
-
-## 数据管道（Sinks�?
-
-爬取数据可同时写入多个目标。在爬虫上声�?`sinks` �?`schema`�?
+老旧站点自动检测编码，也可手动指定：
 
 ```python
-class NewsSpider(BaseSpider):
-    name = "news"
-    schema = {"url": "string", "title": "string", "content": "text"}
-    primary_key = ["url"]  # 有主键则 upsert，无则追�?
-    sinks = [
-        {"type": "csv", "path": "./data/news.csv"},
-        {"type": "excel", "path": "./data/news.xlsx"},
-        {"type": "kafka", "topic": "news_data", "bootstrap_servers": "localhost:9092"},
-        {"type": "doris", "host": "localhost", "database": "crawl", "table": "news"},
-        {"type": "json", "path": "./data/news.jsonl"},
-    ]
+class OldSiteSpider(BaseSpider):
+    name = "old_site"
+    start_urls = ["http://old-site.com"]
+    # encoding = "gbk"  # 手动指定编码（一般不需要，自动检测）
 ```
 
-| Sink | 说明 | 自动创建 |
-|------|------|----------|
-| `csv` | CSV 文件追加写入 | 自动创建目录 |
-| `excel` | Excel 文件（需 openpyxl�?| 自动创建 |
-| `json` | JSON/JSONL 文件 | 自动创建 |
-| `kafka` | Kafka topic（需 aiokafka�?| `auto_create=True` 自动�?topic |
-| `doris` | Doris HTTP Stream Load | `auto_create=True` 自动建表 |
-| `parquet` | Parquet 列式存储（需 pandas + pyarrow�?| 自动创建目录 |
+自动检测优先级：HTTP Content-Type charset → HTML meta charset → charset-normalizer 推断 → UTF-8
 
-不配�?sinks 则只写默认数据表。主键类型映射：`string→VARCHAR(500)`、`text→TEXT`、`int→BIGINT`、`float→DOUBLE`、`datetime→DATETIME`�?
+## 表单提交
 
-## 定时任务（Schedules�?
-
-```
-GET    /schedules                 # 列出调度
-POST   /schedules                 # 创建（Body: {"spider_name":"x","cron":"0 */6 * * *","params":{}}�?
-PUT    /schedules/{id}            # 修改
-DELETE /schedules/{id}            # 删除
-POST   /schedules/{id}/enable     # 启用
-POST   /schedules/{id}/disable    # 禁用
-GET    /schedules/{id}/runs       # 执行历史
+```python
+async def run(self):
+    page = await self.get("http://site.com/login")
+    # 自动提取隐藏字段（ViewState、CSRF token 等）
+    form_data = self.auto_fill_form(page, "form#login", {
+        "username": "admin",
+        "password": "123456",
+    })
+    result = await self.post("http://site.com/login", data=form_data)
 ```
 
-也可在爬虫类上静态声明：`schedule = "0 */6 * * *"`。动态调度优先级高于静态�?
+## 响应元数据
 
+```python
+page = await self.get(url)
+page.status           # HTTP 状态码
+page.headers          # 响应头
+page.cookies          # 响应 Cookie
+page.url              # 最终 URL（重定向后）
+page.body             # 原始响应体 bytes
+page.encoding         # 响应编码
+page.captured_xhr     # 捕获的 XHR 响应列表
+```
 
+## 多 Session 路由
 
+同一爬虫内混合使用 HTTP 和浏览器：
 
+```python
+class MixedSpider(BaseSpider):
+    name = "mixed"
+    use_stealth = False  # 默认 HTTP
 
+    async def run(self):
+        # HTTP 请求（快，轻量）
+        list_page = await self.get("https://site.com/list")
 
+        # 需要浏览器时，用 stealth session
+        detail = await self.get("https://site.com/detail", stealth=True)
+        yield {"content": detail.css(".content").get("")}
+```
+
+## 开发调试模式
+
+```python
+class DebugSpider(BaseSpider):
+    name = "debug"
+    development_mode = True  # 缓存响应到磁盘，开发调试免重请求
+```
+
+## 全部配置属性
+
+```python
+class MySpider(BaseSpider):
+    # === 基本信息 ===
+    name = "my_spider"               # 唯一标识（必填）
+    description = "爬虫描述"          # 描述信息
+    start_urls = ["https://..."]      # 起始 URL 列表
+    schedule = "0 */6 * * *"         # cron 表达式（可选，None=手动触发）
+
+    # === 请求控制 ===
+    max_retries = 3                   # 失败重试次数
+    retry_delay = 60                  # 重试间隔（秒）
+    concurrent_requests = 4           # 并发请求数
+    download_delay = 0.5              # 请求间隔（秒）
+    timeout = 30                      # 请求超时（秒）
+    ssl_verify = True                 # SSL 证书验证
+    follow_redirects = True           # 跟随重定向
+    allow_internal_redirects = False  # 允许重定向到内网 IP（Scrapling 默认阻止 SSRF）
+
+    # === 请求头/Cookie ===
+    default_headers = {}              # 自定义请求头
+    cookies = {}                      # 预设 Cookie
+
+    # === 反爬与指纹 ===
+    impersonate = "chrome"            # TLS 指纹（chrome/firefox/safari/edge）
+    http3 = False                     # HTTP/3
+    stealthy_headers = True           # 真实浏览器请求头
+    block_ads = False                 # 屏蔽广告域名
+    blocked_domains = set()           # 自定义屏蔽域名
+    dns_over_https = False            # DNS over HTTPS
+    locale = None                     # 浏览器语言（如 "zh-CN"）
+    timezone_id = None                # 浏览器时区（如 "Asia/Shanghai"）
+    proxies = []                      # 代理列表（多个自动轮换）
+
+    # === 浏览器模式（use_stealth=True 时生效） ===
+    use_stealth = False               # 启用隐身浏览器
+    solve_cloudflare = False          # 自动破解 Cloudflare
+    block_webrtc = False              # 阻断 WebRTC
+    hide_canvas = False               # Canvas 噪声
+    allow_webgl = True                # 允许 WebGL
+    real_chrome = False               # 使用真实 Chrome
+    cdp_url = None                    # CDP 远程浏览器地址
+    user_data_dir = None              # 浏览器数据目录（持久化 Cookie）
+    init_script = None                # 页面创建前注入 JS
+    max_pages = 1                     # 标签页池大小
+    disable_resources = True          # 屏蔽图片/字体/媒体
+    network_idle = False              # 等待网络空闲
+    load_dom = True                   # 等待 DOM 加载
+    wait_selector = None              # 等待指定元素出现
+    wait_selector_state = "attached"  # 等待状态
+    wait = 0                          # 额外等待毫秒
+    page_action = None                # 页面加载后执行（Playwright 操作）
+    page_setup = None                 # 页面导航前执行
+    capture_xhr = None                # XHR 拦截 URL 正则
+
+    # === 自适应 ===
+    adaptive = False                  # 自适应选择器
+    adaptive_storage = None           # 自适应数据库路径
+
+    # === 数据 ===
+    crawl_mode = "incremental"        # incremental | full（全量清空表）
+    fields = []                       # 字段定义（自动建表）
+    dedup_key = None                  # 去重键
+    sinks = []                        # 数据管道（不配置则默认写数据库）
+    schema = {}                       # 数据 schema
+    primary_key = []                  # 主键
+
+    # === 开发 ===
+    development_mode = False          # 缓存响应到磁盘
+```
+
+## 注意事项
+
+- `run()` 是异步生成器，用 `yield` 返回数据项
+- 循环中检查 `self.should_stop` 以支持优雅停止
+- `self.get()`/`self.post()` 必须在 `run()` 内调用（session 由 Runner 注入）
+- 文件保存到 `spiders/` 目录后自动注册
+- 爬虫名 `name` 必须唯一
+- 不配置 `sinks` 且定义了 `fields` → 自动写入数据库
+- 配置了 `sinks` → 只写 sinks，不写数据库
+- `use_stealth=True` 时 `get()`/`post()` 自动使用浏览器
+- 失败自动重试（`max_retries` 次，指数退避）
+- 暂停后可恢复（利用 Scrapling crawldir 断点机制）

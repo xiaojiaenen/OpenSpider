@@ -44,3 +44,22 @@ web/dist/
 
 # Claude
 .claude/
+
+# CodeGraph
+.codegraph/
+
+# Deploy runtime
+deploy/crawl_data/
+deploy/logs/
+deploy/data/
+deploy/__pycache__/
+
+# Deployment package
+openspider-deploy.zip
+openspider-deploy.tar.gz
+
+# Nezha
+.nezha/
+
+# Reasonix
+.reasonix/

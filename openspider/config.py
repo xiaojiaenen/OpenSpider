@@ -26,7 +26,7 @@ class Settings(BaseSettings):
     api_port: int = 8000
 
     # 爬虫
-    spiders_dir: Path = Path("./openspider/spiders")
+    spiders_dir: Path = Path("./spiders")
     crawl_data_dir: Path = Path("./crawl_data")
     max_concurrent_spiders: int = 10
 

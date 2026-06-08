@@ -1,0 +1,36 @@
+services:
+  # 后端 API（端口 10010）
+  openspider:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+      args:
+        BASE_IMAGE: ${BASE_IMAGE:-python:3.13-slim}
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.org/simple}
+    container_name: openspider
+    ports:
+      - "${BACKEND_PORT:-10010}:8088"
+    env_file:
+      - .env
+    volumes:
+      - ../spiders:/app/spiders
+      - ./logs:/app/logs
+      - ./crawl_data:/app/crawl_data
+      - ./data:/app/data
+    restart: unless-stopped
+
+  # 前端 Nginx（端口 10009）
+  # 需要先手动打包前端: cd web && npm run build，产物在 web/dist/
+  frontend:
+    image: ${NGINX_IMAGE:-nginx:alpine}
+    container_name: openspider-frontend
+    command: ["nginx", "-g", "daemon off;"]
+    user: "0:0"
+    ports:
+      - "${FRONTEND_PORT:-10009}:10009"
+    volumes:
+      - ../web/dist:/usr/share/nginx/html:ro
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - openspider
+    restart: unless-stopped
